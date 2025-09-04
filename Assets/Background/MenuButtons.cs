@@ -1,17 +1,27 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using System.Collections;
 
 public class MenuButtons : MonoBehaviour
 {
-    public void NuevaPartida()
+    [SerializeField] private MenuUIController ui;
+
+    [SerializeField] private float clickDelay = 0.08f; // igual a tu Click Feedback o la duración del SFX
+
+    public void NuevaPartida() => SceneManager.LoadScene("SampleScene");
+
+    public void Opciones()
     {
-        Debug.Log("DEBUG: Entró a NuevaPartida()");
-        SceneManager.LoadScene("SampleScene");
+        // deja que el sonido del botón suene y luego abre el panel
+        StartCoroutine(OpenOptionsAfterClick());
     }
 
-    public void Salir()
+    private IEnumerator OpenOptionsAfterClick()
     {
-        Debug.Log("DEBUG: Botón Salir presionado");
-        Application.Quit();
+        yield return new WaitForSecondsRealtime(clickDelay);
+        if (ui) ui.ShowOptions();
+        else Debug.LogError("[MenuButtons] Falta MenuUIController.");
     }
-}   
+
+    public void Salir() => Application.Quit();
+}
