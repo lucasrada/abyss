@@ -376,6 +376,13 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   moveSpeed: 5
+  dashKey: 108
+  dashSpeed: 16
+  dashDuration: 0.25
+  dashCooldown: 5
+  invulnerableWhileDashing: 1
+  ignoreEnemiesWhileDashing: 0
+  enemyLayerName: Enemy
 --- !u!95 &1244046775
 Animator:
   serializedVersion: 7
