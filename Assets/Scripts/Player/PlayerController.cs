@@ -1,20 +1,28 @@
 using UnityEngine;
 using System.Collections;
 
-[RequireComponent(typeof(Rigidbody2D), typeof(Animator))]
+[RequireComponent(typeof(Rigidbody2D), typeof(Animator), typeof(Collider2D))]
 public class PlayerController : MonoBehaviour
 {
     [Header("Movement Settings")]
     [Tooltip("Velocidad de movimiento del jugador")]
     public float moveSpeed = 5f;
 
+    [Header("Combat Settings")]
+    [Tooltip("Damage dealt to enemies")]
+    public int attackDamage = 25;
+    [Tooltip("Attack range")]
+    public float attackRange = 1.5f;
+    [Tooltip("Player's maximum health")]
+    public int maxHealth = 100;
+    
     [Header("Dash Settings")]
     [Tooltip("Tecla para dachear")]
     public KeyCode dashKey = KeyCode.L;
     [Tooltip("Velocidad del dash")]
     public float dashSpeed = 16f;
-    [Tooltip("Duración del dash (segundos)")]
-    public float dashDuration = 0.25f;   // ágil
+    [Tooltip("DuraciÃ³n del dash (segundos)")]
+    public float dashDuration = 0.25f;   // Ã¡gil
     [Tooltip("Enfriamiento del dash (segundos)")]
     public float dashCooldown = 5f;
     [Tooltip("Invulnerable durante el dash")]
@@ -28,7 +36,7 @@ public class PlayerController : MonoBehaviour
     private Animator animator;
 
     private Vector2 movement;
-    private Vector2 lastDirection = Vector2.down; // dirección inicial
+    private Vector2 lastDirection = Vector2.down; // direcciÃ³n inicial
 
     // --- Estado de dash ---
     private bool isDashing = false;
@@ -37,17 +45,33 @@ public class PlayerController : MonoBehaviour
     private Vector2 dashDir;
     private int playerLayer = -1, enemyLayer = -1;
 
+    // --- Combat ---
+    private int currentHealth;
+    private bool isInvulnerable = false;
+    private bool isDead = false;
+
+    // --- Events ---
+    public System.Action<int> OnHealthChanged;
+    public System.Action OnPlayerDeath;
+
     void Awake()
     {
         rb = GetComponent<Rigidbody2D>();
         animator = GetComponent<Animator>();
         playerLayer = gameObject.layer;
         enemyLayer = LayerMask.NameToLayer(enemyLayerName);
+        currentHealth = maxHealth;
     }
 
-    // No dispares ataques si está en transición o ya atacando
+    void Start()
+    {
+        OnHealthChanged?.Invoke(currentHealth);
+    }
+
+    // No dispares ataques si estÃ¡ en transiciÃ³n o ya atacando
     bool CanFireAttack()
     {
+        if (isDead) return false;
         if (animator.IsInTransition(0)) return false;
         if (animator.GetBool("IsAttacking")) return false;
         return true;
@@ -55,20 +79,29 @@ public class PlayerController : MonoBehaviour
 
     void Update()
     {
+        if (isDead) return;
+
         bool isAttacking = animator.GetBool("IsAttacking");
 
-        // 1) Input de movimiento solo si NO está atacando ni dacheando
+        // 1) Input de movimiento solo si NO estÃ¡ atacando ni dacheando
         if (!isAttacking && !isDashing)
         {
-            movement.x = Input.GetAxisRaw("Horizontal");
-            movement.y = Input.GetAxisRaw("Vertical");
+            float horizontal = Input.GetAxisRaw("Horizontal");
+            float vertical = Input.GetAxisRaw("Vertical");
+            
+            // Fix diagonal movement normalization
+            movement = new Vector2(horizontal, vertical);
+            if (movement.magnitude > 1f)
+            {
+                movement = movement.normalized;
+            }
         }
         else
         {
-            movement = Vector2.zero; // inmóvil mientras dura el ataque o dash
+            movement = Vector2.zero; // inmÃ³vil mientras dura el ataque o dash
         }
 
-        // 2) Guardar última dirección no nula
+        // 2) Guardar Ãºltima direcciÃ³n no nula
         if (!isDashing && movement.sqrMagnitude > 0.01f)
             lastDirection = movement.normalized;
 
@@ -80,7 +113,7 @@ public class PlayerController : MonoBehaviour
         else
             dir = lastDirection.y >= 0 ? 2 : 0;
 
-        // 4) Parámetros al Animator (no rompemos tu flujo)
+        // 4) ParÃ¡metros al Animator (no rompemos tu flujo)
         animator.SetFloat("Horizontal", lastDirection.x);
         animator.SetFloat("Vertical", lastDirection.y);
         animator.SetFloat("Speed", movement.sqrMagnitude);
@@ -91,11 +124,13 @@ public class PlayerController : MonoBehaviour
         {
             animator.ResetTrigger("Attack1");
             animator.SetTrigger("Attack1");
+            PerformAttack();
         }
         if (Input.GetKeyDown(KeyCode.K) && CanFireAttack())
         {
             animator.ResetTrigger("Attack2");
             animator.SetTrigger("Attack2");
+            PerformAttack();
         }
 
         // 6) Otros triggers de ejemplo
@@ -110,7 +145,7 @@ public class PlayerController : MonoBehaviour
             animator.SetTrigger("Death");
         }
 
-        // (Opcional) Si usás "Mover" como trigger de arranque de locomoción
+        // (Opcional) Si usÃ¡s "Mover" como trigger de arranque de locomociÃ³n
         if (!isAttacking && (Input.GetKeyDown(KeyCode.A) ||
                              Input.GetKeyDown(KeyCode.W) ||
                              Input.GetKeyDown(KeyCode.D) ||
@@ -120,7 +155,7 @@ public class PlayerController : MonoBehaviour
             animator.SetTrigger("Mover");
         }
 
-        // 7) Iniciar dash (funciona aunque estés corriendo)
+        // 7) Iniciar dash (funciona aunque estÃ©s corriendo)
         if (!isDashing && !isAttacking && Time.time >= nextDashTime && Input.GetKeyDown(dashKey))
         {
             dashDir = GetDashDirectionSnap8(); // 8 direcciones
@@ -130,6 +165,8 @@ public class PlayerController : MonoBehaviour
 
     void FixedUpdate()
     {
+        if (isDead) return;
+
         if (isDashing)
         {
             // MovePosition respeta colisiones con paredes
@@ -141,6 +178,69 @@ public class PlayerController : MonoBehaviour
         {
             rb.MovePosition(rb.position + movement * moveSpeed * Time.fixedDeltaTime);
         }
+    }
+
+    void PerformAttack()
+    {
+        // Find enemies in attack range
+        Collider2D[] hitEnemies = Physics2D.OverlapCircleAll(transform.position, attackRange, 1 << enemyLayer);
+        
+        // Filter enemies in the direction we're facing
+        Vector2 attackDirection = lastDirection;
+        
+        foreach (Collider2D enemy in hitEnemies)
+        {
+            Vector2 dirToEnemy = (enemy.transform.position - transform.position).normalized;
+            float dot = Vector2.Dot(attackDirection, dirToEnemy);
+            
+            // Attack enemies that are roughly in the direction we're facing (120 degree cone)
+            if (dot > 0.5f)
+            {
+                EnemyController enemyController = enemy.GetComponent<EnemyController>();
+                if (enemyController != null)
+                {
+                    enemyController.TakeDamage(attackDamage);
+                }
+            }
+        }
+    }
+
+    public void TakeDamage(int damage)
+    {
+        if (isInvulnerable || isDead) return;
+
+        currentHealth -= damage;
+        OnHealthChanged?.Invoke(currentHealth);
+
+        if (currentHealth <= 0)
+        {
+            Die();
+        }
+        else
+        {
+            animator.SetTrigger("Hit");
+            StartCoroutine(InvulnerabilityFrames(1f));
+        }
+    }
+
+    void Die()
+    {
+        isDead = true;
+        currentHealth = 0;
+        animator.SetTrigger("Death");
+        OnPlayerDeath?.Invoke();
+    }
+
+    IEnumerator InvulnerabilityFrames(float duration)
+    {
+        isInvulnerable = true;
+        yield return new WaitForSeconds(duration);
+        isInvulnerable = false;
+    }
+
+    public void SetInvulnerable(bool invulnerable)
+    {
+        isInvulnerable = invulnerable;
     }
 
     // --- Utilidades de dash (8 direcciones) ---
@@ -162,7 +262,7 @@ public class PlayerController : MonoBehaviour
         if (a) return Vector2.left;
         if (d) return Vector2.right;
 
-        // Si no acompañás con WASD, snap de la última dirección a 8 direcciones
+        // Si no acompaÃ±Ã¡s con WASD, snap de la Ãºltima direcciÃ³n a 8 direcciones
         if (lastDirection.sqrMagnitude < 0.0001f)
             return Vector2.down; // fallback
 
@@ -176,7 +276,7 @@ public class PlayerController : MonoBehaviour
         if (sx != 0) return new Vector2(sx, 0f);
         if (sy != 0) return new Vector2(0f, sy);
 
-        return Vector2.down; // último fallback
+        return Vector2.down; // Ãºltimo fallback
     }
 
     void StartDash()
@@ -186,12 +286,12 @@ public class PlayerController : MonoBehaviour
         nextDashTime = Time.time + dashCooldown;
 
         if (invulnerableWhileDashing)
-            SendMessage("SetInvulnerable", true, SendMessageOptions.DontRequireReceiver);
+            SetInvulnerable(true);
 
         if (ignoreEnemiesWhileDashing && enemyLayer != -1)
             Physics2D.IgnoreLayerCollision(playerLayer, enemyLayer, true);
 
-        // Si tenés un bool IsDashing en el Animator y querés usarlo:
+        // Si tenÃ©s un bool IsDashing en el Animator y querÃ©s usarlo:
         if (HasParam(animator, "IsDashing")) animator.SetBool("IsDashing", true);
     }
 
@@ -200,7 +300,7 @@ public class PlayerController : MonoBehaviour
         isDashing = false;
 
         if (invulnerableWhileDashing)
-            SendMessage("SetInvulnerable", false, SendMessageOptions.DontRequireReceiver);
+            SetInvulnerable(false);
 
         if (ignoreEnemiesWhileDashing && enemyLayer != -1)
             Physics2D.IgnoreLayerCollision(playerLayer, enemyLayer, false);
@@ -214,4 +314,16 @@ public class PlayerController : MonoBehaviour
             if (p.name == paramName) return true;
         return false;
     }
+
+    // For debugging attack range
+    void OnDrawGizmosSelected()
+    {
+        Gizmos.color = Color.red;
+        Gizmos.DrawWireSphere(transform.position, attackRange);
+    }
+
+    // Getters for other scripts
+    public bool IsDead => isDead;
+    public int CurrentHealth => currentHealth;
+    public int MaxHealth => maxHealth;
 }

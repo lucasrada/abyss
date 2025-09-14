@@ -6,13 +6,12 @@ public class MenuButtons : MonoBehaviour
 {
     [SerializeField] private MenuUIController ui;
 
-    [SerializeField] private float clickDelay = 0.08f; // igual a tu Click Feedback o la duración del SFX
+    [SerializeField] private float clickDelay = 0.08f;
 
-    public void NuevaPartida() => SceneManager.LoadScene("SampleScene");
+    public void NuevaPartida() => SceneManager.LoadScene("Level");
 
     public void Opciones()
     {
-        // deja que el sonido del botón suene y luego abre el panel
         StartCoroutine(OpenOptionsAfterClick());
     }
 
