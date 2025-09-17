@@ -9,12 +9,12 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 3732381177663724333}
-  - component: {fileID: 9216886300534890948}
   - component: {fileID: 4610659141884333173}
   - component: {fileID: 2187765725573904295}
+  - component: {fileID: 5763799466635825098}
   m_Layer: 6
   m_Name: Enemy
-  m_TagString: Untagged
+  m_TagString: Enemy
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
@@ -35,19 +35,6 @@ Transform:
   - {fileID: 7965519403719884038}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &9216886300534890948
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 7183798004871989107}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 386761d060034e140bc3f4a4c71c1fea, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  speed: 2
 --- !u!50 &4610659141884333173
 Rigidbody2D:
   serializedVersion: 5
@@ -121,6 +108,29 @@ BoxCollider2D:
   m_AutoTiling: 0
   m_Size: {x: 1, y: 1}
   m_EdgeRadius: 0
+--- !u!114 &5763799466635825098
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7183798004871989107}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4443d7253caff4002be6d4944964de43, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  moveSpeed: 3
+  detectionRange: 8
+  attackRange: 1.2
+  separationDistance: 1.5
+  separationForce: 2
+  maxHealth: 50
+  attackDamage: 15
+  attackCooldown: 1.5
+  pathUpdateInterval: 0.2
+  waypointThreshold: 0.3
+  idleTime: 3
 --- !u!1 &9221268253082397790
 GameObject:
   m_ObjectHideFlags: 0
