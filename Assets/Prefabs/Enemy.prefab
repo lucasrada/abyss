@@ -10,7 +10,7 @@ GameObject:
   m_Component:
   - component: {fileID: 3732381177663724333}
   - component: {fileID: 4610659141884333173}
-  - component: {fileID: 2187765725573904295}
+  - component: {fileID: 961587474307145775}
   - component: {fileID: 5763799466635825098}
   m_Layer: 6
   m_Name: Enemy
@@ -62,8 +62,8 @@ Rigidbody2D:
   m_SleepingMode: 1
   m_CollisionDetection: 0
   m_Constraints: 4
---- !u!61 &2187765725573904295
-BoxCollider2D:
+--- !u!70 &961587474307145775
+CapsuleCollider2D:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
@@ -96,18 +96,9 @@ BoxCollider2D:
   m_UsedByEffector: 0
   m_CompositeOperation: 0
   m_CompositeOrder: 0
-  m_Offset: {x: 0, y: 0}
-  m_SpriteTilingProperty:
-    border: {x: 0, y: 0, z: 0, w: 0}
-    pivot: {x: 0, y: 0}
-    oldSize: {x: 0, y: 0}
-    newSize: {x: 0, y: 0}
-    adaptiveTilingThreshold: 0
-    drawMode: 0
-    adaptiveTiling: 0
-  m_AutoTiling: 0
-  m_Size: {x: 1, y: 1}
-  m_EdgeRadius: 0
+  m_Offset: {x: 0.0056657195, y: -0.25566548}
+  m_Size: {x: 0.60198295, y: 0.36402342}
+  m_Direction: 1
 --- !u!114 &5763799466635825098
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -125,12 +116,18 @@ MonoBehaviour:
   attackRange: 1.2
   separationDistance: 1.5
   separationForce: 2
+  turnSmoothness: 5
   maxHealth: 50
   attackDamage: 15
   attackCooldown: 1.5
-  pathUpdateInterval: 0.2
-  waypointThreshold: 0.3
-  idleTime: 3
+  aiUpdateInterval: 0.1
+  reachThreshold: 0.5
+  searchTime: 4
+  searchSpeedMultiplier: 0.7
+  usePathfinding: 1
+  obstacleCheckDistance: 1.2
+  pathfindingDirections: 8
+  showDebug: 0
 --- !u!1 &9221268253082397790
 GameObject:
   m_ObjectHideFlags: 0

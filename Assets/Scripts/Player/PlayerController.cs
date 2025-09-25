@@ -36,7 +36,7 @@ public class PlayerController : MonoBehaviour
     private Animator animator;
 
     private Vector2 movement;
-    private Vector2 lastDirection = Vector2.down; // dirección inicial
+    private Vector2 lastDirection = Vector2.down;
 
     // --- Estado de dash ---
     private bool isDashing = false;
@@ -68,7 +68,6 @@ public class PlayerController : MonoBehaviour
         OnHealthChanged?.Invoke(currentHealth);
     }
 
-    // No dispares ataques si está en transición o ya atacando
     bool CanFireAttack()
     {
         if (isDead) return false;
@@ -83,13 +82,11 @@ public class PlayerController : MonoBehaviour
 
         bool isAttacking = animator.GetBool("IsAttacking");
 
-        // 1) Input de movimiento solo si NO está atacando ni dacheando
         if (!isAttacking && !isDashing)
         {
             float horizontal = Input.GetAxisRaw("Horizontal");
             float vertical = Input.GetAxisRaw("Vertical");
             
-            // Fix diagonal movement normalization
             movement = new Vector2(horizontal, vertical);
             if (movement.magnitude > 1f)
             {
@@ -98,28 +95,23 @@ public class PlayerController : MonoBehaviour
         }
         else
         {
-            movement = Vector2.zero; // inmóvil mientras dura el ataque o dash
+            movement = Vector2.zero;
         }
 
-        // 2) Guardar última dirección no nula
         if (!isDashing && movement.sqrMagnitude > 0.01f)
             lastDirection = movement.normalized;
 
-        // 3) Calcular Dir: 0=Down,1=Right,2=Up,3=Left
-        //    Bias horizontal en empates (diagonales) para que W+D use "derecha".
         int dir;
         if (Mathf.Abs(lastDirection.x) >= Mathf.Abs(lastDirection.y))
             dir = lastDirection.x >= 0 ? 1 : 3;
         else
             dir = lastDirection.y >= 0 ? 2 : 0;
 
-        // 4) Parámetros al Animator (no rompemos tu flujo)
         animator.SetFloat("Horizontal", lastDirection.x);
         animator.SetFloat("Vertical", lastDirection.y);
         animator.SetFloat("Speed", movement.sqrMagnitude);
         animator.SetInteger("Dir", dir);
 
-        // 5) Ataques (ejemplo con J/K)
         if (Input.GetKeyDown(KeyCode.J) && CanFireAttack())
         {
             animator.ResetTrigger("Attack1");
@@ -133,7 +125,6 @@ public class PlayerController : MonoBehaviour
             PerformAttack();
         }
 
-        // 6) Otros triggers de ejemplo
         if (!isAttacking && Input.GetKeyDown(KeyCode.H))
         {
             animator.ResetTrigger("Hit");
@@ -145,7 +136,6 @@ public class PlayerController : MonoBehaviour
             animator.SetTrigger("Death");
         }
 
-        // (Opcional) Si usás "Mover" como trigger de arranque de locomoción
         if (!isAttacking && (Input.GetKeyDown(KeyCode.A) ||
                              Input.GetKeyDown(KeyCode.W) ||
                              Input.GetKeyDown(KeyCode.D) ||
@@ -155,10 +145,9 @@ public class PlayerController : MonoBehaviour
             animator.SetTrigger("Mover");
         }
 
-        // 7) Iniciar dash (funciona aunque estés corriendo)
         if (!isDashing && !isAttacking && Time.time >= nextDashTime && Input.GetKeyDown(dashKey))
         {
-            dashDir = GetDashDirectionSnap8(); // 8 direcciones
+            dashDir = GetDashDirectionSnap8();
             StartDash();
         }
     }
@@ -169,7 +158,6 @@ public class PlayerController : MonoBehaviour
 
         if (isDashing)
         {
-            // MovePosition respeta colisiones con paredes
             rb.MovePosition(rb.position + dashDir * dashSpeed * Time.fixedDeltaTime);
 
             if (Time.time >= dashEndTime) EndDash();
@@ -182,10 +170,8 @@ public class PlayerController : MonoBehaviour
 
     void PerformAttack()
     {
-        // Find enemies in attack range
         Collider2D[] hitEnemies = Physics2D.OverlapCircleAll(transform.position, attackRange, 1 << enemyLayer);
         
-        // Filter enemies in the direction we're facing
         Vector2 attackDirection = lastDirection;
         
         foreach (Collider2D enemy in hitEnemies)
@@ -193,7 +179,6 @@ public class PlayerController : MonoBehaviour
             Vector2 dirToEnemy = (enemy.transform.position - transform.position).normalized;
             float dot = Vector2.Dot(attackDirection, dirToEnemy);
             
-            // Attack enemies that are roughly in the direction we're facing (120 degree cone)
             if (dot > 0.5f)
             {
                 EnemyController enemyController = enemy.GetComponent<EnemyController>();
@@ -229,6 +214,12 @@ public class PlayerController : MonoBehaviour
         currentHealth = 0;
         animator.SetTrigger("Death");
         OnPlayerDeath?.Invoke();
+
+        DeathScreenManager dsm = FindFirstObjectByType<DeathScreenManager>();
+        if (dsm != null)
+        {
+            dsm.ShowDeathScreen();
+        }
     }
 
     IEnumerator InvulnerabilityFrames(float duration)
@@ -246,25 +237,23 @@ public class PlayerController : MonoBehaviour
     // --- Utilidades de dash (8 direcciones) ---
     Vector2 GetDashDirectionSnap8()
     {
-        // Prioridad: combinaciones diagonales si se aprieta L junto a WASD
         bool w = Input.GetKey(KeyCode.W);
         bool a = Input.GetKey(KeyCode.A);
         bool s = Input.GetKey(KeyCode.S);
         bool d = Input.GetKey(KeyCode.D);
 
-        if (w && d) return new Vector2(1f, 1f).normalized;   // up-right
-        if (w && a) return new Vector2(-1f, 1f).normalized;  // up-left
-        if (s && d) return new Vector2(1f, -1f).normalized;  // down-right
-        if (s && a) return new Vector2(-1f, -1f).normalized; // down-left
+        if (w && d) return new Vector2(1f, 1f).normalized;
+        if (w && a) return new Vector2(-1f, 1f).normalized;
+        if (s && d) return new Vector2(1f, -1f).normalized;
+        if (s && a) return new Vector2(-1f, -1f).normalized;
 
         if (w) return Vector2.up;
         if (s) return Vector2.down;
         if (a) return Vector2.left;
         if (d) return Vector2.right;
 
-        // Si no acompañás con WASD, snap de la última dirección a 8 direcciones
         if (lastDirection.sqrMagnitude < 0.0001f)
-            return Vector2.down; // fallback
+            return Vector2.down;
 
         float x = lastDirection.x;
         float y = lastDirection.y;
@@ -272,11 +261,11 @@ public class PlayerController : MonoBehaviour
         int sx = Mathf.Abs(x) < 0.1f ? 0 : (x > 0 ? 1 : -1);
         int sy = Mathf.Abs(y) < 0.1f ? 0 : (y > 0 ? 1 : -1);
 
-        if (sx != 0 && sy != 0) return new Vector2(sx, sy).normalized; // diagonal
+        if (sx != 0 && sy != 0) return new Vector2(sx, sy).normalized;
         if (sx != 0) return new Vector2(sx, 0f);
         if (sy != 0) return new Vector2(0f, sy);
 
-        return Vector2.down; // último fallback
+        return Vector2.down;
     }
 
     void StartDash()
@@ -291,7 +280,6 @@ public class PlayerController : MonoBehaviour
         if (ignoreEnemiesWhileDashing && enemyLayer != -1)
             Physics2D.IgnoreLayerCollision(playerLayer, enemyLayer, true);
 
-        // Si tenés un bool IsDashing en el Animator y querés usarlo:
         if (HasParam(animator, "IsDashing")) animator.SetBool("IsDashing", true);
     }
 
@@ -315,14 +303,12 @@ public class PlayerController : MonoBehaviour
         return false;
     }
 
-    // For debugging attack range
     void OnDrawGizmosSelected()
     {
         Gizmos.color = Color.red;
         Gizmos.DrawWireSphere(transform.position, attackRange);
     }
 
-    // Getters for other scripts
     public bool IsDead => isDead;
     public int CurrentHealth => currentHealth;
     public int MaxHealth => maxHealth;
