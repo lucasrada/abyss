@@ -1,143 +1,178 @@
-using System.Collections.Generic;
+using System.Collections;
 using UnityEngine;
 
 public class DungeonManager : MonoBehaviour
 {
     [Header("References")]
-    public DungeonGenerator dungeonGenerator;
-    public LevelExit levelExitPrefab;
-    public Transform player;
-    public EnemySpawner enemySpawner;
+    [SerializeField] private DungeonGenerator dungeonGenerator;
+    [SerializeField] private GameObject levelExitPrefab;   // Prefab with PortalController
+    [SerializeField] private Transform player;
+    [SerializeField] private EnemySpawner enemySpawner;
 
     [Header("Level Settings")]
     [Tooltip("Spawn offset for positioning")]
-    public Vector3 spawnOffset = new Vector3(0.5f, 0.5f);
-    
+    public Vector3 spawnOffset = new Vector3(0.5f, 0.5f, 0f);
+
     [Header("Level Progression")]
     [Tooltip("Increase enemy count per level")]
     public int enemyIncreasePerLevel = 1;
     [Tooltip("Current level number")]
     public int currentLevel = 1;
 
-    private Dungeon currentDungeon;
-    private Transform levelParent;
-
-    // Events for other systems
+    // Events
     public System.Action<int> OnLevelStart;
     public System.Action<int> OnLevelComplete;
 
-    private void Start()
+    // Runtime
+    private Dungeon currentDungeon;
+    private Transform levelParent;
+    private PortalController exitController;
+    private Coroutine watcherRoutine;
+
+    private IEnumerator Start()
     {
-        // Validate references
-        if (enemySpawner == null)
+        // Auto-find DungeonGenerator if missing
+        if (!dungeonGenerator)
         {
-            enemySpawner = FindObjectOfType<EnemySpawner>();
-            if (enemySpawner == null)
+#if UNITY_2022_1_OR_NEWER
+            dungeonGenerator = FindFirstObjectByType<DungeonGenerator>();
+#else
+            dungeonGenerator = FindObjectOfType<DungeonGenerator>();
+#endif
+            if (!dungeonGenerator)
             {
-                Debug.LogError("EnemySpawner not found! Please assign it in the inspector or add it to the scene.");
+                Debug.LogError("[DungeonManager] DungeonGenerator not assigned or found.");
+                yield break;
             }
         }
 
-        Vector3 startPosition = NextLevel();
-        if (player != null)
+        // Auto-find EnemySpawner if missing
+        if (enemySpawner)
         {
-            player.transform.position = startPosition;
+            int baseCount = enemySpawner.totalEnemiestoSpawn;
+            enemySpawner.totalEnemiestoSpawn = Mathf.Max(5, baseCount + (currentLevel - 1) * enemyIncreasePerLevel);
+
+            enemySpawner.SpawnEnemiesInDungeon(currentDungeon, playerSpawn, player);
+
+            enemySpawner.totalEnemiestoSpawn = baseCount;
+
+            Debug.Log($"[DungeonManager] Spawned enemies, alive: {GetRemainingEnemies()}");
         }
+
+
+        if (!levelExitPrefab)
+        {
+            Debug.LogError("[DungeonManager] Level Exit Prefab not assigned (drag it from Project).");
+            yield break;
+        }
+
+        yield return null; // wait a frame so other Start() methods run
+
+        Vector3 startPos = NextLevel();
+        if (player) player.position = startPos;
     }
 
     public Vector3 NextLevel()
     {
-        // Clean up previous level
-        if (levelParent != null)
+        // Stop watcher + clear previous level
+        if (watcherRoutine != null)
+        {
+            StopCoroutine(watcherRoutine);
+            watcherRoutine = null;
+        }
+        if (levelParent)
         {
             Destroy(levelParent.gameObject);
+            levelParent = null;
         }
 
-        // Create new level parent
+        // Create level root
         levelParent = new GameObject($"Level {currentLevel}").transform;
 
-        // Generate new dungeon
+        // Generate dungeon
         currentDungeon = dungeonGenerator.CreateDungeon();
-
-        // Get spawn position
-        Vector3 playerSpawnPosition = currentDungeon.GetStartLocation() + spawnOffset;
-
-        // Create exit
-        LevelExit exit = Instantiate(
-            levelExitPrefab, 
-            currentDungeon.GetExitLocation() + spawnOffset, 
-            Quaternion.identity
-        );
-
-        exit.dungeonManager = this;
-        exit.transform.parent = levelParent;
-
-        // Spawn enemies if spawner is available
-        if (enemySpawner != null)
+        if (currentDungeon == null)
         {
-            // Increase enemy count based on level
-            int baseEnemyCount = enemySpawner.totalEnemiestoSpawn;
-            enemySpawner.totalEnemiestoSpawn = Mathf.Max(5, baseEnemyCount + (currentLevel - 1) * enemyIncreasePerLevel);
-            
-            enemySpawner.SpawnEnemiesInDungeon(currentDungeon, playerSpawnPosition);
-            
-            // Reset to original value
-            enemySpawner.totalEnemiestoSpawn = baseEnemyCount;
-            
-            Debug.Log($"Attempted to spawn enemies. Total spawned: {enemySpawner.GetAliveEnemyCount()}");
-        }
-        else
-        {
-            Debug.LogWarning("EnemySpawner is null! Enemies will not spawn properly.");
+            Debug.LogError("[DungeonManager] CreateDungeon() returned null.");
+            return player ? player.position : Vector3.zero;
         }
 
-        // Notify other systems about level start
+        Vector3 playerSpawn = currentDungeon.GetStartLocation() + spawnOffset;
+        Vector3 exitPos = currentDungeon.GetExitLocation() + spawnOffset;
+
+        // Instantiate exit portal
+        GameObject exitGO = Instantiate(levelExitPrefab, exitPos, Quaternion.identity, levelParent);
+        exitController = exitGO.GetComponent<PortalController>();
+        if (exitController)
+        {
+            exitController.dungeonManager = this;
+            exitController.SetActive(false); // start locked
+        }
+
+        // Spawn enemies
+        if (enemySpawner)
+        {
+            int baseCount = enemySpawner.totalEnemiestoSpawn;
+            enemySpawner.totalEnemiestoSpawn = Mathf.Max(5, baseCount + (currentLevel - 1) * enemyIncreasePerLevel);
+
+            // Pass player Transform here
+            enemySpawner.SpawnEnemiesInDungeon(currentDungeon, playerSpawn, player);
+
+            enemySpawner.totalEnemiestoSpawn = baseCount;
+            Debug.Log($"[DungeonManager] Spawned enemies, alive: {GetRemainingEnemies()}");
+        }
+
+        // Events + watcher
         OnLevelStart?.Invoke(currentLevel);
+        watcherRoutine = StartCoroutine(WatchEnemiesAndActivatePortal());
 
-        Debug.Log($"Generated Level {currentLevel} with {enemySpawner?.GetAliveEnemyCount() ?? 0} enemies");
+        return playerSpawn;
+    }
 
-        return playerSpawnPosition;
+    private IEnumerator WatchEnemiesAndActivatePortal()
+    {
+        if (!exitController) yield break;
+
+        if (!enemySpawner)
+        {
+            exitController.SetActive(true);
+            yield break;
+        }
+
+        var wait = new WaitForSeconds(0.25f);
+        while (true)
+        {
+            if (GetRemainingEnemies() <= 0)
+            {
+                exitController.SetActive(true);
+                yield break;
+            }
+            yield return wait;
+        }
     }
 
     public void CompleteLevel()
     {
-        // Notify other systems about level completion
         OnLevelComplete?.Invoke(currentLevel);
-        
-        Debug.Log($"Level {currentLevel} completed!");
-        
+        Debug.Log($"[DungeonManager] Level {currentLevel} complete.");
         currentLevel++;
-        
-        // Move to next level
-        Vector3 nextSpawnPosition = NextLevel();
-        if (player != null)
-        {
-            player.transform.position = nextSpawnPosition;
-        }
+
+        Vector3 nextSpawn = NextLevel();
+        if (player) player.position = nextSpawn;
     }
 
-    // Public getters for other scripts
+    // Getters
     public Dungeon GetCurrentDungeon() => currentDungeon;
     public int GetCurrentLevel() => currentLevel;
-    public int GetRemainingEnemies() => enemySpawner?.GetAliveEnemyCount() ?? 0;
+    public int GetRemainingEnemies() => enemySpawner ? enemySpawner.GetAliveEnemyCount() : 0;
+    public bool ShouldCompleteLevel() => true;
 
-    // Method to check if level should be completed (optional - can be used for different win conditions)
-    public bool ShouldCompleteLevel()
+    private void OnDrawGizmosSelected()
     {
-        // For now, level is complete when player reaches exit
-        // But you could add other conditions like "kill all enemies first"
-        return true;
-    }
-
-    void OnDrawGizmosSelected()
-    {
-        if (currentDungeon != null)
-        {
-            Gizmos.color = Color.green;
-            Gizmos.DrawWireSphere(currentDungeon.GetStartLocation() + spawnOffset, 0.5f);
-            
-            Gizmos.color = Color.red;
-            Gizmos.DrawWireSphere(currentDungeon.GetExitLocation() + spawnOffset, 0.5f);
-        }
+        if (currentDungeon == null) return;
+        Gizmos.color = Color.green;
+        Gizmos.DrawWireSphere(currentDungeon.GetStartLocation() + spawnOffset, 0.5f);
+        Gizmos.color = Color.red;
+        Gizmos.DrawWireSphere(currentDungeon.GetExitLocation() + spawnOffset, 0.5f);
     }
 }

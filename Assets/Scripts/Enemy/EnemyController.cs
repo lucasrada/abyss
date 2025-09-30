@@ -1,3 +1,4 @@
+// EnemyController.cs (REPLACE existing file)
 using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
@@ -6,82 +7,65 @@ using System.Collections.Generic;
 public class EnemyController : MonoBehaviour
 {
     [Header("Movement Settings")]
-    [Tooltip("Movement speed")]
     public float moveSpeed = 3f;
-    [Tooltip("Detection range for player")]
     public float detectionRange = 8f;
-    [Tooltip("Attack range")]
     public float attackRange = 1.2f;
-    [Tooltip("Minimum distance to maintain from other enemies")]
     public float separationDistance = 1.5f;
-    [Tooltip("Strength of separation force")]
     public float separationForce = 2f;
-    [Tooltip("How smoothly to turn (lower = smoother)")]
-    public float turnSmoothness = 5f;
+    public float turnSmoothness = 8f;
 
     [Header("Combat Settings")]
-    [Tooltip("Enemy's maximum health")]
     public int maxHealth = 50;
-    [Tooltip("Damage dealt to player")]
     public int attackDamage = 15;
-    [Tooltip("Time between attacks")]
     public float attackCooldown = 1.5f;
 
-    [Header("AI Behavior")]
-    [Tooltip("How often to update AI decisions")]
-    public float aiUpdateInterval = 0.1f;
-    [Tooltip("Distance threshold to consider 'reached' a target")]
-    public float reachThreshold = 0.5f;
-    [Tooltip("How long to search after losing player")]
+    [Header("AI")]
+    public float aiUpdateInterval = 0.12f;
+    public float reachThreshold = 0.35f;
     public float searchTime = 4f;
-    [Tooltip("Speed when searching (multiplier)")]
     public float searchSpeedMultiplier = 0.7f;
 
     [Header("Pathfinding")]
-    [Tooltip("Use simple pathfinding around obstacles")]
     public bool usePathfinding = true;
-    [Tooltip("Ray distance for obstacle detection")]
-    public float obstacleCheckDistance = 1.2f;
-    [Tooltip("Number of directions to check for pathfinding")]
-    public int pathfindingDirections = 8;
+    public float pathRecalcInterval = 0.5f; // how often to recompute A*
+    public int maxAStarIterations = 20000; // safety cap
 
     [Header("Debug")]
-    [Tooltip("Show debug information")]
     public bool showDebug = false;
 
+    // runtime
     private Transform player;
     private Rigidbody2D rb;
     private Collider2D col;
-    
-    // Health and combat
     private int currentHealth;
-    private float nextAttackTime;
     private bool isDead = false;
 
-    // AI State
-    public enum EnemyState { Idle, Chasing, Searching, Attacking, Dead }
+    private enum EnemyState { Idle, Chasing, Searching, Attacking, Dead }
     private EnemyState currentState = EnemyState.Idle;
-    
-    // Movement and pathfinding
-    private Vector2 targetPosition;
-    private Vector2 lastKnownPlayerPosition;
-    private float lastPlayerSeenTime;
-    private float nextAIUpdate;
-    private Vector2 currentVelocity;
-    private Vector2 smoothedMovement;
 
-    // Pathfinding
+    // path following
     private Queue<Vector2> pathQueue = new Queue<Vector2>();
     private Vector2 currentPathTarget;
     private bool isFollowingPath = false;
+    private float lastPathTime = -99f;
 
-    // References to other enemies for separation
+    // movement smoothing
+    private Vector2 currentVelocity = Vector2.zero;
+    private Vector2 desiredVelocity = Vector2.zero;
+
+    // separation
     private List<EnemyController> nearbyEnemies = new List<EnemyController>();
-    private float lastSeparationUpdate;
+    private float lastSeparationUpdate = 0f;
 
-    // Layer masks
+    // dungeon reference (injected by spawner)
+    private Dungeon dungeon = null;
+
+    // layers
     private LayerMask wallLayerMask;
     private LayerMask enemyLayerMask;
+
+    // attack
+    private float nextAttackTime = 0f;
 
     void Start()
     {
@@ -89,37 +73,36 @@ public class EnemyController : MonoBehaviour
         StartCoroutine(AIUpdateRoutine());
     }
 
+    public void InitializeWithDungeon(Dungeon dungeonRef, Transform playerTransform = null)
+    {
+        this.dungeon = dungeonRef;
+        if (playerTransform != null) player = playerTransform;
+    }
+
     void Initialize()
     {
-        GameObject playerObj = GameObject.FindGameObjectWithTag("Player");
-        if (playerObj != null)
-            player = playerObj.transform;
+        if (player == null)
+        {
+            GameObject p = GameObject.FindGameObjectWithTag("Player");
+            if (p) player = p.transform;
+        }
 
         rb = GetComponent<Rigidbody2D>();
         col = GetComponent<Collider2D>();
-        
-        if (col == null)
-        {
-            col = gameObject.AddComponent<CircleCollider2D>();
-        }
-        
-        currentHealth = maxHealth;
-        targetPosition = transform.position;
-        
-        // Set up layer masks - be defensive about missing layers
-        try
-        {
-            wallLayerMask = LayerMask.GetMask("Default", "Wall");
-            enemyLayerMask = LayerMask.GetMask("Enemy");
-        }
-        catch
-        {
-            wallLayerMask = 1; // Default layer
-            enemyLayerMask = 0;
-            if (showDebug) Debug.LogWarning($"{name}: Could not find expected layers, using defaults");
-        }
+        if (col == null) col = gameObject.AddComponent<CircleCollider2D>();
 
-        if (showDebug) Debug.Log($"{name}: Enemy initialized at {transform.position}");
+        currentHealth = maxHealth;
+
+        wallLayerMask = LayerMask.GetMask("Default", "Wall");
+        enemyLayerMask = LayerMask.GetMask("Enemy");
+
+        if (showDebug) Debug.Log($"{name}: Initialized. Player={player?.name}");
+    }
+
+    void ClearPath()
+    {
+        pathQueue.Clear();
+        isFollowingPath = false;
     }
 
     IEnumerator AIUpdateRoutine()
@@ -136,337 +119,411 @@ public class EnemyController : MonoBehaviour
     {
         if (player == null || isDead) return;
 
-        float distanceToPlayer = Vector2.Distance(transform.position, player.position);
-        bool canSeePlayer = CanSeePlayer();
-
-        EnemyState oldState = currentState;
+        float dist = Vector2.Distance(transform.position, player.position);
+        bool canSee = CanSeePlayer();
 
         switch (currentState)
         {
             case EnemyState.Idle:
-                if (canSeePlayer && distanceToPlayer <= detectionRange)
+                if (canSee && dist <= detectionRange)
                 {
-                    EnterChaseState();
+                    currentState = EnemyState.Chasing;
                 }
                 break;
 
             case EnemyState.Chasing:
-                if (canSeePlayer)
+                if (canSee)
                 {
-                    UpdateChaseState(distanceToPlayer);
+                    // direct chase if no obstacle, else pathfind
+                    if (!usePathfinding || DirectPathTo(player.position))
+                    {
+                        // direct pursuit
+                        isFollowingPath = false;
+                        SetDesiredVelocityTowards(player.position, 1f);
+                    }
+                    else // need pathfinding around obstacles
+                    {
+                        TryEnsurePathTo(player.position);
+                        FollowPathBehavior();
+                    }
                 }
                 else
                 {
-                    EnterSearchState();
+                    // lost sight -> search
+                    currentState = EnemyState.Searching;
+                    // record last known position
+                    lastKnownPlayerPosition = player.position;
+                    lastPlayerSeenTime = Time.time;
+                    TryEnsurePathTo(lastKnownPlayerPosition);
                 }
                 break;
 
             case EnemyState.Searching:
-                UpdateSearchState(distanceToPlayer, canSeePlayer);
+                // follow last known position or wander around a bit
+                if (canSee)
+                {
+                    currentState = EnemyState.Chasing;
+                    break;
+                }
+
+                // if following a path, continue; otherwise slow roam toward last known pos
+                if (isFollowingPath)
+                {
+                    FollowPathBehavior();
+                }
+                else
+                {
+                    // small slow move towards last known
+                    if (Vector2.Distance(transform.position, lastKnownPlayerPosition) > reachThreshold)
+                        SetDesiredVelocityTowards(lastKnownPlayerPosition, searchSpeedMultiplier);
+                    else
+                        SetDesiredVelocity(Vector2.zero);
+                }
+
+                // exit search after timeout
+                if (Time.time - lastPlayerSeenTime > searchTime)
+                {
+                    currentState = EnemyState.Idle;
+                    ClearPath();
+                }
                 break;
 
             case EnemyState.Attacking:
-                UpdateAttackState(distanceToPlayer, canSeePlayer);
+                // Attack logic
+                if (dist <= attackRange && Time.time >= nextAttackTime)
+                {
+                    AttackPlayer();
+                }
+                else if (dist > attackRange)
+                {
+                    currentState = EnemyState.Chasing;
+                }
                 break;
         }
 
-        if (showDebug && oldState != currentState)
+        // if extremely close, trigger attack state
+        if (dist <= attackRange && Time.time >= nextAttackTime && !isDead)
         {
-            Debug.Log($"{name}: State changed from {oldState} to {currentState}");
+            currentState = EnemyState.Attacking;
+            SetDesiredVelocity(Vector2.zero);
         }
     }
 
-    void EnterChaseState()
-    {
-        currentState = EnemyState.Chasing;
-        lastKnownPlayerPosition = player.position;
-        lastPlayerSeenTime = Time.time;
-        ClearPath();
-    }
+    // ---------- Path & steering helpers ----------
 
-    void UpdateChaseState(float distanceToPlayer)
+    private Vector2 lastKnownPlayerPosition;
+    private float lastPlayerSeenTime = 0f;
+
+    void TryEnsurePathTo(Vector2 targetWorld)
     {
-        lastKnownPlayerPosition = player.position;
-        lastPlayerSeenTime = Time.time;
-        
-        if (distanceToPlayer <= attackRange)
+        if (dungeon == null)
         {
-            currentState = EnemyState.Attacking;
-            ClearPath();
+            // no dungeon grid available, we will use raycasts / direct steering
+            return;
+        }
+
+        if (Time.time - lastPathTime < pathRecalcInterval && isFollowingPath) return; // rate-limit
+
+        // compute A* path (grid -> world)
+        List<Vector2> path = ComputePathAStar(transform.position, targetWorld, maxAStarIterations);
+
+        lastPathTime = Time.time;
+
+        if (path != null && path.Count > 0)
+        {
+            pathQueue.Clear();
+            foreach (var p in path) pathQueue.Enqueue(p);
+            currentPathTarget = pathQueue.Dequeue();
+            isFollowingPath = true;
         }
         else
         {
-            SetTarget(player.position);
+            // no path found; fallback to direct steering (will try again later)
+            isFollowingPath = false;
         }
     }
 
-    void EnterSearchState()
+    void FollowPathBehavior()
     {
-        currentState = EnemyState.Searching;
-        SetTarget(lastKnownPlayerPosition);
-        
-        if (showDebug)
-            Debug.Log($"{name}: Lost sight of player, searching at {lastKnownPlayerPosition}");
-    }
-
-    void UpdateSearchState(float distanceToPlayer, bool canSeePlayer)
-    {
-        if (canSeePlayer && distanceToPlayer <= detectionRange)
+        if (!isFollowingPath)
         {
-            EnterChaseState();
+            SetDesiredVelocity(Vector2.zero);
             return;
         }
 
-        if (Time.time - lastPlayerSeenTime > searchTime)
+        // if reached currentPathTarget, advance
+        if (Vector2.Distance(transform.position, currentPathTarget) <= reachThreshold)
         {
-            currentState = EnemyState.Idle;
-            if (showDebug) Debug.Log($"{name}: Giving up search, returning to idle");
-            return;
-        }
-
-        // Continue moving to last known position
-        if (Vector2.Distance(transform.position, lastKnownPlayerPosition) < reachThreshold)
-        {
-            // Reached search location, look around
-            Vector2 searchDirection = Random.insideUnitCircle.normalized * 2f;
-            SetTarget(lastKnownPlayerPosition + searchDirection);
-        }
-    }
-
-    void UpdateAttackState(float distanceToPlayer, bool canSeePlayer)
-    {
-        if (!canSeePlayer || distanceToPlayer > attackRange * 1.5f)
-        {
-            if (canSeePlayer)
-                EnterChaseState();
+            if (pathQueue.Count > 0)
+            {
+                currentPathTarget = pathQueue.Dequeue();
+            }
             else
-                EnterSearchState();
-        }
-        else if (Time.time >= nextAttackTime)
-        {
-            AttackPlayer();
-        }
-    }
-
-    void FixedUpdate()
-    {
-        if (isDead) return;
-
-        Vector2 moveDirection = CalculateMovement();
-        
-        // Smooth the movement for better visual quality
-        smoothedMovement = Vector2.Lerp(smoothedMovement, moveDirection, Time.fixedDeltaTime * turnSmoothness);
-        
-        float currentSpeed = moveSpeed;
-        if (currentState == EnemyState.Searching)
-            currentSpeed *= searchSpeedMultiplier;
-
-        rb.MovePosition(rb.position + smoothedMovement * currentSpeed * Time.fixedDeltaTime);
-    }
-
-    Vector2 CalculateMovement()
-    {
-        Vector2 desiredDirection = Vector2.zero;
-
-        // Calculate direction based on state
-        switch (currentState)
-        {
-            case EnemyState.Chasing:
-            case EnemyState.Searching:
-                desiredDirection = GetDirectionToTarget();
-                break;
-            case EnemyState.Attacking:
-                // Face the player but don't move
-                if (player != null)
-                {
-                    desiredDirection = (player.position - transform.position).normalized * 0.1f; // Slight movement
-                }
-                break;
-        }
-
-        // Apply separation from other enemies
-        Vector2 separationForceVector = GetSeparationForce();
-        desiredDirection += separationForceVector;
-
-        // Use pathfinding if enabled and we detect obstacles
-        if (usePathfinding && desiredDirection.magnitude > 0.1f)
-        {
-            desiredDirection = GetPathfindingDirection(desiredDirection);
-        }
-
-        return desiredDirection.magnitude > 1f ? desiredDirection.normalized : desiredDirection;
-    }
-
-    Vector2 GetDirectionToTarget()
-    {
-        Vector2 target = targetPosition;
-        
-        // Use path target if we have one
-        if (isFollowingPath && pathQueue.Count > 0)
-        {
-            target = currentPathTarget;
-            
-            // Check if we reached the current path waypoint
-            if (Vector2.Distance(transform.position, target) < reachThreshold)
             {
-                if (pathQueue.Count > 0)
-                {
-                    currentPathTarget = pathQueue.Dequeue();
-                }
-                else
-                {
-                    isFollowingPath = false;
-                }
+                isFollowingPath = false;
+                SetDesiredVelocity(Vector2.zero);
+                return;
             }
         }
 
-        return (target - (Vector2)transform.position).normalized;
+        // desired move direction towards currentPathTarget
+        SetDesiredVelocityTowards(currentPathTarget, 1f);
     }
 
-    Vector2 GetPathfindingDirection(Vector2 desiredDirection)
+    bool DirectPathTo(Vector2 worldTarget)
     {
-        // Check if the direct path is blocked
-        RaycastHit2D hit = Physics2D.Raycast(transform.position, desiredDirection, obstacleCheckDistance, wallLayerMask);
-        
-        if (hit.collider == null)
-        {
-            return desiredDirection; // Direct path is clear
-        }
+        // if there's a clear raycast to target with no wall, treat as direct
+        Vector2 dir = (worldTarget - (Vector2)transform.position).normalized;
+        float dist = Vector2.Distance(transform.position, worldTarget);
 
-        // Try alternative directions
-        float[] angles = new float[pathfindingDirections];
-        for (int i = 0; i < pathfindingDirections; i++)
-        {
-            angles[i] = (360f / pathfindingDirections) * i;
-        }
+        RaycastHit2D hit = Physics2D.Raycast(transform.position, dir, dist, wallLayerMask);
+        return hit.collider == null;
+    }
 
-        // Sort angles by how close they are to our desired direction
-        float desiredAngle = Mathf.Atan2(desiredDirection.y, desiredDirection.x) * Mathf.Rad2Deg;
-        System.Array.Sort(angles, (a, b) => 
-        {
-            float diffA = Mathf.DeltaAngle(desiredAngle, a);
-            float diffB = Mathf.DeltaAngle(desiredAngle, b);
-            return Mathf.Abs(diffA).CompareTo(Mathf.Abs(diffB));
-        });
+    void SetDesiredVelocityTowards(Vector2 worldTarget, float speedMultiplier)
+    {
+        Vector2 dir = (worldTarget - (Vector2)transform.position).normalized;
+        Vector2 sep = GetSeparationForce();
+        Vector2 combined = (dir * moveSpeed * speedMultiplier) + sep;
+        SetDesiredVelocity(combined);
+    }
 
-        // Try each direction until we find one that's not blocked
-        foreach (float angle in angles)
-        {
-            Vector2 testDirection = new Vector2(Mathf.Cos(angle * Mathf.Deg2Rad), Mathf.Sin(angle * Mathf.Deg2Rad));
-            RaycastHit2D testHit = Physics2D.Raycast(transform.position, testDirection, obstacleCheckDistance, wallLayerMask);
-            
-            if (testHit.collider == null)
-            {
-                return testDirection;
-            }
-        }
-
-        return Vector2.zero; // All directions blocked
+    void SetDesiredVelocity(Vector2 v)
+    {
+        desiredVelocity = v;
     }
 
     Vector2 GetSeparationForce()
     {
-        Vector2 separationVector = Vector2.zero;
+        Vector2 sep = Vector2.zero;
         int count = 0;
 
-        foreach (EnemyController enemy in nearbyEnemies)
+        foreach (var e in nearbyEnemies)
         {
-            if (enemy != null && enemy != this && !enemy.isDead)
+            if (e == null || e == this || e.isDead) continue;
+            float d = Vector2.Distance(transform.position, e.transform.position);
+            if (d < separationDistance && d > 0.001f)
             {
-                float distance = Vector2.Distance(transform.position, enemy.transform.position);
-                if (distance < separationDistance && distance > 0.01f)
-                {
-                    Vector2 directionAway = ((Vector2)transform.position - (Vector2)enemy.transform.position).normalized;
-                    float strength = (separationDistance - distance) / separationDistance; // Stronger when closer
-                    separationVector += directionAway * strength;
-                    count++;
-                }
+                Vector2 away = ((Vector2)transform.position - (Vector2)e.transform.position).normalized;
+                float strength = (separationDistance - d) / separationDistance;
+                sep += away * strength;
+                count++;
             }
         }
 
-        if (count > 0)
-        {
-            separationVector = (separationVector / count) * separationForce;
-        }
-
-        return separationVector;
+        if (count > 0) sep = (sep / count) * separationForce;
+        return sep;
     }
 
     void UpdateNearbyEnemies()
     {
-        if (Time.time - lastSeparationUpdate < 0.2f) return; // Update every 0.2 seconds
-        
+        if (Time.time - lastSeparationUpdate < 0.2f) return;
         nearbyEnemies.Clear();
-        Collider2D[] colliders = Physics2D.OverlapCircleAll(transform.position, separationDistance * 2f, enemyLayerMask);
-        
-        foreach (Collider2D col in colliders)
+        Collider2D[] cols = Physics2D.OverlapCircleAll(transform.position, separationDistance * 2f, enemyLayerMask);
+        foreach (var c in cols)
         {
-            EnemyController enemy = col.GetComponent<EnemyController>();
-            if (enemy != null && enemy != this)
-            {
-                nearbyEnemies.Add(enemy);
-            }
+            var e = c.GetComponent<EnemyController>();
+            if (e != null && e != this) nearbyEnemies.Add(e);
         }
-        
         lastSeparationUpdate = Time.time;
     }
 
-    bool CanSeePlayer()
+    // ---------- Movement application (physics) ----------
+    void FixedUpdate()
     {
-        if (player == null) return false;
+        if (isDead || rb == null) return;
 
-        Vector2 directionToPlayer = (player.position - transform.position).normalized;
-        float distanceToPlayer = Vector2.Distance(transform.position, player.position);
+        // smooth the velocity
+        currentVelocity = Vector2.Lerp(currentVelocity, desiredVelocity, Time.fixedDeltaTime * turnSmoothness);
 
-        if (distanceToPlayer > detectionRange) return false;
-
-        RaycastHit2D hit = Physics2D.Raycast(transform.position, directionToPlayer, distanceToPlayer, wallLayerMask);
-        return hit.collider == null;
+        // finally move
+        rb.MovePosition(rb.position + currentVelocity * Time.fixedDeltaTime);
     }
 
-    void SetTarget(Vector2 newTarget)
+    // ---------- Pathfinding: A* on dungeon grid ----------
+    List<Vector2> ComputePathAStar(Vector2 startWorld, Vector2 goalWorld, int maxIterations = 20000)
     {
-        targetPosition = newTarget;
-        ClearPath(); // Clear any existing path when setting a new target
+        if (dungeon == null) return null;
+
+        char[,] layout = dungeon.GetLayout();
+        int width = layout.GetLength(0);
+        int height = layout.GetLength(1);
+
+        Vector2Int start = WorldToGrid(startWorld, width, height);
+        Vector2Int goal = WorldToGrid(goalWorld, width, height);
+
+        // if start or goal is not on a floor, find nearest floor tile
+        if (!IsWalkable(start, width, height)) start = FindNearestFloor(start, width, height);
+        if (!IsWalkable(goal, width, height)) goal = FindNearestFloor(goal, width, height);
+
+        if (start == goal)
+            return new List<Vector2>(); // already there
+
+        // basic A*
+        var open = new List<Node>();
+        var closed = new bool[width, height];
+        var gScore = new float[width, height];
+
+        for (int x=0;x<width;x++) for (int y=0;y<height;y++) gScore[x,y] = float.PositiveInfinity;
+
+        Node startNode = new Node(start, 0f, Heuristic(start, goal), null);
+        open.Add(startNode);
+        gScore[start.x, start.y] = 0f;
+
+        int iterations = 0;
+        while (open.Count > 0 && iterations < maxIterations)
+        {
+            iterations++;
+            // get node with lowest f
+            open.Sort((a,b)=> a.f.CompareTo(b.f));
+            Node current = open[0];
+            open.RemoveAt(0);
+
+            if (current.pos == goal)
+            {
+                // build path
+                List<Vector2> path = new List<Vector2>();
+                Node n = current;
+                // we want path from next step after start to goal
+                while (n != null && n.parent != null)
+                {
+                    path.Add(GridToWorld(n.pos));
+                    n = n.parent;
+                }
+                path.Reverse();
+                return path;
+            }
+
+            closed[current.pos.x, current.pos.y] = true;
+
+            foreach (var offset in neighborOffsets)
+            {
+                Vector2Int nb = current.pos + offset;
+                if (nb.x < 0 || nb.x >= width || nb.y < 0 || nb.y >= height) continue;
+                if (closed[nb.x, nb.y]) continue;
+                if (!IsWalkable(nb, width, height)) continue;
+
+                // diagonal corner cutting prevention
+                bool isDiag = Mathf.Abs(offset.x) == 1 && Mathf.Abs(offset.y) == 1;
+                if (isDiag)
+                {
+                    Vector2Int a = new Vector2Int(current.pos.x + offset.x, current.pos.y);
+                    Vector2Int b = new Vector2Int(current.pos.x, current.pos.y + offset.y);
+                    if (!IsWalkable(a, width, height) || !IsWalkable(b, width, height)) continue;
+                }
+
+                float tentativeG = gScore[current.pos.x, current.pos.y] + (isDiag ? 1.41421356f : 1f);
+                if (tentativeG < gScore[nb.x, nb.y])
+                {
+                    gScore[nb.x, nb.y] = tentativeG;
+                    float h = Heuristic(nb, goal);
+                    Node existing = open.Find(node => node.pos == nb);
+                    if (existing == null)
+                    {
+                        open.Add(new Node(nb, tentativeG, h, current));
+                    }
+                    else
+                    {
+                        existing.g = tentativeG;
+                        existing.f = tentativeG + h;
+                        existing.parent = current;
+                    }
+                }
+            }
+        }
+
+        // failed to find path
+        return null;
     }
 
-    void ClearPath()
+    static readonly Vector2Int[] neighborOffsets = new Vector2Int[]
     {
-        pathQueue.Clear();
-        isFollowingPath = false;
+        new Vector2Int(0,1), new Vector2Int(1,0), new Vector2Int(0,-1), new Vector2Int(-1,0),
+        new Vector2Int(1,1), new Vector2Int(1,-1), new Vector2Int(-1,1), new Vector2Int(-1,-1)
+    };
+
+    Vector2Int WorldToGrid(Vector2 w, int width, int height)
+    {
+        int gx = Mathf.Clamp(Mathf.FloorToInt(w.x), 0, width - 1);
+        int gy = Mathf.Clamp(Mathf.FloorToInt(w.y), 0, height - 1);
+        return new Vector2Int(gx, gy);
     }
 
+    Vector2 GridToWorld(Vector2Int g)
+    {
+        return new Vector2(g.x + 0.5f, g.y + 0.5f);
+    }
+
+    bool IsWalkable(Vector2Int g, int width, int height)
+    {
+        if (g.x < 0 || g.x >= width || g.y < 0 || g.y >= height) return false;
+        return dungeon.IsFloor(g.x, g.y);
+    }
+
+    Vector2Int FindNearestFloor(Vector2Int start, int width, int height)
+    {
+        // BFS outward until we find a floor cell
+        var q = new Queue<Vector2Int>();
+        var seen = new bool[width, height];
+        q.Enqueue(start);
+        seen[start.x, start.y] = true;
+
+        while (q.Count > 0)
+        {
+            var p = q.Dequeue();
+            if (IsWalkable(p, width, height)) return p;
+            foreach (var off in neighborOffsets)
+            {
+                var nb = p + off;
+                if (nb.x < 0 || nb.x >= width || nb.y < 0 || nb.y >= height) continue;
+                if (seen[nb.x, nb.y]) continue;
+                seen[nb.x, nb.y] = true;
+                q.Enqueue(nb);
+            }
+        }
+        return start; // fallback
+    }
+
+    float Heuristic(Vector2Int a, Vector2Int b)
+    {
+        return Vector2.Distance(a, b);
+    }
+
+    class Node
+    {
+        public Vector2Int pos;
+        public float g;
+        public float f;
+        public Node parent;
+        public Node(Vector2Int pos, float g, float h, Node parent)
+        {
+            this.pos = pos; this.g = g; this.f = g + h; this.parent = parent;
+        }
+    }
+
+    // ---------- Combat & misc ----------
     void AttackPlayer()
     {
         nextAttackTime = Time.time + attackCooldown;
-        
-        PlayerController playerController = player.GetComponent<PlayerController>();
-        if (playerController != null && !playerController.IsDead)
+        var pc = player.GetComponent<PlayerController>();
+        if (pc != null && !pc.IsDead)
         {
-            playerController.TakeDamage(attackDamage);
-            if (showDebug) Debug.Log($"{name} attacks player for {attackDamage} damage!");
+            pc.TakeDamage(attackDamage);
+            if (showDebug) Debug.Log($"{name} attacked player for {attackDamage}");
         }
     }
 
     public void TakeDamage(int damage)
     {
         if (isDead) return;
-
         currentHealth -= damage;
-        
-        if (showDebug) Debug.Log($"{name} takes {damage} damage! Health: {currentHealth}");
-        
-        if (currentHealth <= 0)
-        {
-            Die();
-        }
+        if (showDebug) Debug.Log($"{name} took {damage}. HP={currentHealth}");
+        if (currentHealth <= 0) Die();
         else
         {
-            // React to being hit
-            if (currentState == EnemyState.Idle && player != null)
-            {
-                EnterChaseState();
-            }
+            // react by chasing
+            currentState = EnemyState.Chasing;
+            TryEnsurePathTo(player != null ? (Vector2)player.position : (Vector2)transform.position);
         }
     }
 
@@ -474,70 +531,28 @@ public class EnemyController : MonoBehaviour
     {
         isDead = true;
         currentState = EnemyState.Dead;
-        
         StopAllCoroutines();
-        
         if (col != null) col.enabled = false;
         if (rb != null) rb.simulated = false;
-        
-        // Notify spawner
-        EnemySpawner spawner = FindFirstObjectByType<EnemySpawner>();
-        if (spawner != null)
-        {
-            spawner.OnEnemyDestroyed(gameObject);
-        }
-        
-        if (showDebug) Debug.Log($"{name} died!");
-        
+
+        // notify spawner (safely try to find spawner)
+        var spawner = FindFirstObjectByType<EnemySpawner>();
+        if (spawner != null) spawner.OnEnemyDestroyed(gameObject);
+
         Destroy(gameObject, 1f);
     }
 
-    void OnDrawGizmosSelected()
+    bool CanSeePlayer()
     {
-        // Detection range
-        Gizmos.color = Color.yellow;
-        Gizmos.DrawWireSphere(transform.position, detectionRange);
-        
-        // Attack range
-        Gizmos.color = Color.red;
-        Gizmos.DrawWireSphere(transform.position, attackRange);
-        
-        // Separation distance
-        Gizmos.color = Color.blue;
-        Gizmos.DrawWireSphere(transform.position, separationDistance);
-        
-        // Current target
-        if (Application.isPlaying)
-        {
-            Gizmos.color = Color.green;
-            Gizmos.DrawLine(transform.position, targetPosition);
-            
-            // Path visualization
-            if (isFollowingPath && pathQueue.Count > 0)
-            {
-                Gizmos.color = Color.cyan;
-                Vector3 currentPos = transform.position;
-                foreach (Vector2 pathPoint in pathQueue)
-                {
-                    Gizmos.DrawLine(currentPos, pathPoint);
-                    Gizmos.DrawWireCube(pathPoint, Vector3.one * 0.2f);
-                    currentPos = pathPoint;
-                }
-            }
-            
-            // Obstacle detection ray
-            if (usePathfinding)
-            {
-                Vector2 direction = (targetPosition - (Vector2)transform.position).normalized;
-                Gizmos.color = Color.magenta;
-                Gizmos.DrawRay(transform.position, direction * obstacleCheckDistance);
-            }
-        }
+        if (player == null) return false;
+        float dist = Vector2.Distance(transform.position, player.position);
+        if (dist > detectionRange) return false;
+        Vector2 dir = (player.position - transform.position).normalized;
+        RaycastHit2D hit = Physics2D.Raycast(transform.position, dir, dist, wallLayerMask);
+        return hit.collider == null;
     }
 
-    // Public getters
+    // small public getters
     public bool IsDead => isDead;
-    public EnemyState State => currentState;
-    public int CurrentHealth => currentHealth;
-    public Vector2 TargetPosition => targetPosition;
+    public Vector2 TargetPosition => isFollowingPath ? currentPathTarget : (player ? (Vector2)player.position : (Vector2)transform.position);
 }
