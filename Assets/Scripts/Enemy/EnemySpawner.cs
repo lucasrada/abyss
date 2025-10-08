@@ -3,72 +3,90 @@ using UnityEngine;
 
 public class EnemySpawner : MonoBehaviour
 {
-    [Header("Spawning Settings")]
-    [Tooltip("Enemy prefab to spawn")]
+    [Header("Enemy Prefab")]
     public GameObject enemyPrefab;
-    [Tooltip("Number of enemies to spawn total")]
-    public int totalEnemiestoSpawn = 10;
-    [Tooltip("Minimum distance from player spawn")]
-    public float minDistanceFromPlayer = 3f;
-    [Tooltip("Minimum distance between enemies")]
-    public float minDistanceBetweenEnemies = 2f;
 
-    private List<GameObject> spawnedEnemies = new List<GameObject>();
-    private Transform enemyParent;
+    [Header("Spawn Settings")]
+    public float spawnOffset = 0.5f;
+    public float minDistanceBetweenEnemies = 3f;
+    public float minDistanceFromPlayer = 5f;
+    public bool spreadAcrossRooms = true;
 
-    public void SpawnEnemiesInDungeon(Dungeon dungeon, Vector3 playerSpawnPosition)
+    private List<GameObject> aliveEnemies = new List<GameObject>();
+
+    public void SpawnEnemiesInDungeon(Dungeon dungeon, Vector3 spawnPos, Transform playerT, int enemyCount)
     {
-        ClearEnemies();
-        
-        if (enemyParent == null)
+        if (enemyPrefab == null || dungeon == null)
         {
-            enemyParent = new GameObject("Enemies").transform;
-        }
-
-        // Get ALL floor positions by checking every coordinate in the dungeon
-        List<Vector2Int> allFloorPositions = GetAllFloorPositions(dungeon);
-        
-        if (allFloorPositions.Count == 0)
-        {
-            Debug.LogError("No floor positions found in dungeon!");
+            Debug.LogWarning("[EnemySpawner] Cannot spawn: missing prefab or dungeon.");
             return;
         }
 
-        Debug.Log($"Found {allFloorPositions.Count} floor positions in dungeon");
+        aliveEnemies.Clear();
 
-        // Convert player spawn to grid coordinates for comparison
-        Vector2Int playerGridPos = new Vector2Int(
-            Mathf.FloorToInt(playerSpawnPosition.x), 
-            Mathf.FloorToInt(playerSpawnPosition.y)
-        );
+        List<Vector2> spawnPositions = spreadAcrossRooms
+            ? GetDistributedSpawnPositions(dungeon, spawnPos, playerT, enemyCount)
+            : GetNearbySpawnPositions(dungeon, spawnPos, playerT, enemyCount);
 
-        // Filter out positions too close to player
-        List<Vector2Int> validPositions = new List<Vector2Int>();
-        foreach (Vector2Int pos in allFloorPositions)
+        int spawned = 0;
+        foreach (Vector2 pos in spawnPositions)
         {
-            float distance = Vector2.Distance(pos, playerGridPos);
-            if (distance >= minDistanceFromPlayer)
+            if (spawned >= enemyCount) break;
+
+            GameObject enemyGO = Instantiate(enemyPrefab, pos, Quaternion.identity, transform);
+            EnemyController ec = enemyGO.GetComponent<EnemyController>();
+            if (ec != null)
             {
-                validPositions.Add(pos);
+                ec.InitializeWithDungeon(dungeon, playerT);
+            }
+
+            aliveEnemies.Add(enemyGO);
+            spawned++;
+        }
+
+        if (spawned < enemyCount)
+        {
+            Debug.LogWarning($"[EnemySpawner] Only spawned {spawned}/{enemyCount} enemies.");
+        }
+    }
+
+    private List<Vector2> GetDistributedSpawnPositions(Dungeon dungeon, Vector3 spawnPos, Transform playerT, int enemyCount)
+    {
+        List<Vector2> positions = new List<Vector2>();
+        List<Room> rooms = dungeon.GetRooms();
+        List<Vector2> candidatePositions = new List<Vector2>();
+
+        if (rooms == null || rooms.Count == 0)
+        {
+            Debug.LogWarning("[EnemySpawner] No rooms found in dungeon. Falling back to nearby spawning.");
+            return GetNearbySpawnPositions(dungeon, spawnPos, playerT, enemyCount);
+        }
+
+        foreach (Room room in rooms)
+        {
+            List<Vector2> roomFloors = room.GetAllFloorPositions();
+            foreach (Vector2 pos in roomFloors)
+            {
+                if (playerT != null && Vector2.Distance(pos, playerT.position) < minDistanceFromPlayer)
+                    continue;
+
+                candidatePositions.Add(pos);
             }
         }
 
-        Debug.Log($"Found {validPositions.Count} valid positions after filtering player distance");
+        int maxAttempts = enemyCount * 20;
+        int attempts = 0;
 
-        // Spawn enemies with proper spacing
-        int enemiesSpawned = 0;
-        List<Vector2Int> usedPositions = new List<Vector2Int>();
-
-        for (int attempt = 0; attempt < 1000 && enemiesSpawned < totalEnemiestoSpawn && validPositions.Count > 0; attempt++)
+        while (positions.Count < enemyCount && attempts < maxAttempts && candidatePositions.Count > 0)
         {
-            int randomIndex = Random.Range(0, validPositions.Count);
-            Vector2Int candidatePos = validPositions[randomIndex];
+            attempts++;
+            int randomIndex = Random.Range(0, candidatePositions.Count);
+            Vector2 candidate = candidatePositions[randomIndex];
 
-            // Check if too close to other spawned enemies
             bool tooClose = false;
-            foreach (Vector2Int usedPos in usedPositions)
+            foreach (Vector2 existing in positions)
             {
-                if (Vector2.Distance(candidatePos, usedPos) < minDistanceBetweenEnemies)
+                if (Vector2.Distance(candidate, existing) < minDistanceBetweenEnemies)
                 {
                     tooClose = true;
                     break;
@@ -77,124 +95,69 @@ public class EnemySpawner : MonoBehaviour
 
             if (!tooClose)
             {
-                // Convert grid position to world position
-                Vector3 worldPos = new Vector3(candidatePos.x + 0.5f, candidatePos.y + 0.5f, 0f);
-                
-                // Double-check this is still a floor position
-                if (dungeon.IsFloor(candidatePos.x, candidatePos.y))
-                {
-                    SpawnEnemyAtPosition(worldPos);
-                    usedPositions.Add(candidatePos);
-                    enemiesSpawned++;
-                    
-                    Debug.Log($"Spawned enemy {enemiesSpawned} at grid ({candidatePos.x}, {candidatePos.y}) = world {worldPos}");
-                }
+                positions.Add(candidate + new Vector2(Random.Range(-spawnOffset, spawnOffset), Random.Range(-spawnOffset, spawnOffset)));
             }
 
-            // Remove this position from candidates to avoid infinite loops
-            validPositions.RemoveAt(randomIndex);
+            candidatePositions.RemoveAt(randomIndex);
         }
 
-        Debug.Log($"Successfully spawned {enemiesSpawned} enemies in dungeon");
+        return positions;
     }
 
-    private List<Vector2Int> GetAllFloorPositions(Dungeon dungeon)
+    private List<Vector2> GetNearbySpawnPositions(Dungeon dungeon, Vector3 spawnPos, Transform playerT, int enemyCount)
     {
-        List<Vector2Int> floorPositions = new List<Vector2Int>();
-        char[,] layout = dungeon.GetLayout();
-        
-        int width = layout.GetLength(0);
-        int height = layout.GetLength(1);
+        List<Vector2> positions = new List<Vector2>();
+        int attempts = 0;
+        int maxAttempts = enemyCount * 10;
 
-        Debug.Log($"Scanning dungeon layout: {width} x {height}");
-
-        for (int x = 0; x < width; x++)
+        while (positions.Count < enemyCount && attempts < maxAttempts)
         {
-            for (int y = 0; y < height; y++)
+            attempts++;
+
+            Vector2 randomPos = new Vector2(
+                spawnPos.x + Random.Range(-5f, 5f),
+                spawnPos.y + Random.Range(-5f, 5f)
+            );
+
+            if (playerT != null && Vector2.Distance(randomPos, playerT.position) < minDistanceFromPlayer)
+                continue;
+
+            Vector2Int gridPos = new Vector2Int(Mathf.RoundToInt(randomPos.x), Mathf.RoundToInt(randomPos.y));
+
+            if (!dungeon.IsInBounds(gridPos.x, gridPos.y) || !dungeon.IsFloor(gridPos.x, gridPos.y))
+                continue;
+
+            bool tooClose = false;
+            foreach (Vector2 existing in positions)
             {
-                // Use the dungeon's own methods to check if it's a floor
-                if (dungeon.IsFloor(x, y))
+                if (Vector2.Distance(randomPos, existing) < minDistanceBetweenEnemies)
                 {
-                    floorPositions.Add(new Vector2Int(x, y));
+                    tooClose = true;
+                    break;
                 }
+            }
+
+            if (!tooClose)
+            {
+                positions.Add(randomPos);
             }
         }
 
-        return floorPositions;
+        return positions;
     }
 
-    private void SpawnEnemyAtPosition(Vector3 position)
+    /// <summary>
+    /// Called by EnemyController when it dies
+    /// </summary>
+    public void OnEnemyDestroyed(GameObject enemy)
     {
-        if (enemyPrefab == null)
-        {
-            Debug.LogError("Enemy prefab is not assigned!");
-            return;
-        }
-
-        GameObject enemy = Instantiate(enemyPrefab, position, Quaternion.identity);
-        enemy.transform.parent = enemyParent;
-        
-        // Set layer if it exists
-        int enemyLayer = LayerMask.NameToLayer("Enemy");
-        if (enemyLayer != -1)
-        {
-            enemy.layer = enemyLayer;
-        }
-        
-        spawnedEnemies.Add(enemy);
-    }
-
-    public void ClearEnemies()
-    {
-        foreach (GameObject enemy in spawnedEnemies)
-        {
-            if (enemy != null)
-                DestroyImmediate(enemy);
-        }
-        
-        spawnedEnemies.Clear();
-        
-        if (enemyParent != null)
-        {
-            DestroyImmediate(enemyParent.gameObject);
-            enemyParent = null;
-        }
-    }
-
-    public List<GameObject> GetAliveEnemies()
-    {
-        spawnedEnemies.RemoveAll(enemy => enemy == null);
-        return new List<GameObject>(spawnedEnemies);
+        aliveEnemies.Remove(enemy);
     }
 
     public int GetAliveEnemyCount()
     {
-        return GetAliveEnemies().Count;
-    }
-
-    public void OnEnemyDestroyed(GameObject enemy)
-    {
-        spawnedEnemies.Remove(enemy);
-    }
-
-    void OnDestroy()
-    {
-        ClearEnemies();
-    }
-
-    // Debug visualization
-    void OnDrawGizmos()
-    {
-        if (Application.isPlaying && spawnedEnemies != null)
-        {
-            Gizmos.color = Color.red;
-            foreach (GameObject enemy in spawnedEnemies)
-            {
-                if (enemy != null)
-                {
-                    Gizmos.DrawWireSphere(enemy.transform.position, 0.3f);
-                }
-            }
-        }
+        // clean nulls
+        aliveEnemies.RemoveAll(e => e == null);
+        return aliveEnemies.Count;
     }
 }
