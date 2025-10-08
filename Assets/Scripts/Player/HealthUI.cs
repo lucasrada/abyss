@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.UI;
+using System.Collections;
 
 public class HealthUI : MonoBehaviour
 {
@@ -13,19 +14,44 @@ public class HealthUI : MonoBehaviour
 
     [Header("Visual Settings")]
     [Tooltip("Color when health is full")]
-    public Color fullHealthColor = Color.green;
+    public Color fullHealthColor = new Color(0.2f, 1f, 0.2f);
+    [Tooltip("Color when health is medium")]
+    public Color mediumHealthColor = new Color(1f, 0.8f, 0f);
     [Tooltip("Color when health is low")]
-    public Color lowHealthColor = Color.red;
-    [Tooltip("Health threshold for low health color")]
+    public Color lowHealthColor = new Color(1f, 0.2f, 0.2f);
+    [Tooltip("Health threshold for low health color (0-1)")]
     [Range(0f, 1f)]
-    public float lowHealthThreshold = 0.3f;
+    public float lowHealthThreshold = 0.25f;
+    [Tooltip("Health threshold for medium health color (0-1)")]
+    [Range(0f, 1f)]
+    public float mediumHealthThreshold = 0.5f;
 
-    // Reference to the fill image for color changes
+    [Header("Animation Settings")]
+    [Tooltip("Smooth transition speed for health changes")]
+    public float smoothSpeed = 5f;
+    [Tooltip("Enable pulsing effect on low health")]
+    public bool pulseOnLowHealth = true;
+    [Tooltip("Pulse speed multiplier")]
+    public float pulseSpeed = 2f;
+    [Tooltip("Pulse intensity (0-1)")]
+    [Range(0f, 1f)]
+    public float pulseIntensity = 0.3f;
+
+    [Header("Background Settings")]
+    [Tooltip("Background image for health bar")]
+    public Image backgroundImage;
+    [Tooltip("Background color")]
+    public Color backgroundColor = new Color(0.15f, 0.15f, 0.15f, 0.8f);
+
     private Image healthBarFill;
+    private float targetHealthValue;
+    private float displayHealthValue;
+    private RectTransform rectTransform;
 
     void Start()
     {
-        // Find player controller if not assigned
+        rectTransform = GetComponent<RectTransform>();
+
         if (playerController == null)
         {
             GameObject player = GameObject.FindGameObjectWithTag("Player");
@@ -35,24 +61,27 @@ public class HealthUI : MonoBehaviour
             }
         }
 
-        // Get the fill image from the slider
         if (healthBarSlider != null)
         {
             healthBarFill = healthBarSlider.fillRect.GetComponent<Image>();
-            
-            // Set up the slider
+
             healthBarSlider.minValue = 0;
-            healthBarSlider.maxValue = 100; // Or use playerController.MaxHealth
-            healthBarSlider.interactable = false; // Players shouldn't drag it
+            healthBarSlider.maxValue = 100;
+            healthBarSlider.interactable = false;
         }
 
-        // Subscribe to health changes
+        if (backgroundImage != null)
+        {
+            backgroundImage.color = backgroundColor;
+        }
+
         if (playerController != null)
         {
             playerController.OnHealthChanged += UpdateHealthDisplay;
             playerController.OnPlayerDeath += OnPlayerDeath;
-            
-            // Initialize display
+
+            targetHealthValue = playerController.CurrentHealth;
+            displayHealthValue = targetHealthValue;
             UpdateHealthDisplay(playerController.CurrentHealth);
         }
         else
@@ -61,47 +90,75 @@ public class HealthUI : MonoBehaviour
         }
     }
 
+    void Update()
+    {
+        if (healthBarSlider != null && playerController != null)
+        {
+            displayHealthValue = Mathf.Lerp(displayHealthValue, targetHealthValue, Time.deltaTime * smoothSpeed);
+            healthBarSlider.value = displayHealthValue;
+
+            float healthPercentage = displayHealthValue / playerController.MaxHealth;
+
+            if (healthBarFill != null)
+            {
+                Color targetColor = GetHealthColor(healthPercentage);
+
+                if (pulseOnLowHealth && healthPercentage <= lowHealthThreshold)
+                {
+                    float pulse = (Mathf.Sin(Time.time * pulseSpeed) + 1f) * 0.5f;
+                    float pulseFactor = 1f - (pulse * pulseIntensity);
+                    targetColor = Color.Lerp(targetColor, Color.white, pulse * pulseIntensity);
+                }
+
+                healthBarFill.color = targetColor;
+            }
+        }
+    }
+
     void UpdateHealthDisplay(int currentHealth)
     {
         if (playerController == null) return;
 
-        // Update slider value
+        targetHealthValue = currentHealth;
+
         if (healthBarSlider != null)
         {
-            healthBarSlider.value = currentHealth;
             healthBarSlider.maxValue = playerController.MaxHealth;
         }
 
-        // Update color if we have the fill image
-        if (healthBarFill != null)
-        {
-            float healthPercentage = (float)currentHealth / playerController.MaxHealth;
-            
-            // Update color based on health percentage
-            Color targetColor = Color.Lerp(lowHealthColor, fullHealthColor, 
-                                         healthPercentage / lowHealthThreshold);
-            healthBarFill.color = healthPercentage <= lowHealthThreshold ? targetColor : fullHealthColor;
-        }
-
-        // Update health text
         if (healthText != null)
         {
             healthText.text = $"{currentHealth} / {playerController.MaxHealth}";
         }
     }
 
+    Color GetHealthColor(float healthPercentage)
+    {
+        if (healthPercentage <= lowHealthThreshold)
+        {
+            return Color.Lerp(lowHealthColor, mediumHealthColor,
+                healthPercentage / lowHealthThreshold);
+        }
+        else if (healthPercentage <= mediumHealthThreshold)
+        {
+            float t = (healthPercentage - lowHealthThreshold) / (mediumHealthThreshold - lowHealthThreshold);
+            return Color.Lerp(mediumHealthColor, fullHealthColor, t);
+        }
+        else
+        {
+            float t = (healthPercentage - mediumHealthThreshold) / (1f - mediumHealthThreshold);
+            return Color.Lerp(fullHealthColor, fullHealthColor, t);
+        }
+    }
+
     void OnPlayerDeath()
     {
-        // You can add death UI handling here
-        Debug.Log("Player has died!");
-        
-        // Update the display to show zero health
+        targetHealthValue = 0;
         UpdateHealthDisplay(0);
     }
 
     void OnDestroy()
     {
-        // Unsubscribe from events to prevent memory leaks
         if (playerController != null)
         {
             playerController.OnHealthChanged -= UpdateHealthDisplay;

@@ -45,6 +45,8 @@ public class Dungeon
 
     public void AddRoom(Room room)
     {
+        rooms.Add(room);
+
         for (int x = room.x; x < room.x + room.width; x++)
         {
             for (int y = room.y; y < room.y + room.height; y++)

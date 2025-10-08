@@ -34,13 +34,17 @@ public class DungeonVisualizer : MonoBehaviour
     // Decora habitaciones al final de pintar el mapa
     public void PaintRoomDecorations(Dungeon dungeon)
     {
+        if (roomDecorConfigs == null || roomDecorConfigs.Count == 0)
+        {
+            return;
+        }
+
         System.Random random = new System.Random();
 
         var rooms = dungeon.GetRooms();
         for (int i = 0; i < rooms.Count; i++)
         {
             Room room = rooms[i];
-            // Usá la última config si hay menos configs que habitaciones
             RoomDecorConfig decorConfig = roomDecorConfigs[Mathf.Min(i, roomDecorConfigs.Count - 1)];
 
             // Decoración de piso dentro de la habitación (no borde)

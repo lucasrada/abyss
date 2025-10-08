@@ -14,6 +14,8 @@ public class DungeonManager : MonoBehaviour
     public Vector3 spawnOffset = new Vector3(0.5f, 0.5f, 0f);
 
     [Header("Level Progression")]
+    [Tooltip("Base enemy count for level 1")]
+    public int baseEnemyCount = 5;
     [Tooltip("Increase enemy count per level")]
     public int enemyIncreasePerLevel = 1;
     [Tooltip("Current level number")]
@@ -31,7 +33,6 @@ public class DungeonManager : MonoBehaviour
 
     private IEnumerator Start()
     {
-        // Auto-find DungeonGenerator if missing
         if (!dungeonGenerator)
         {
 #if UNITY_2022_1_OR_NEWER
@@ -46,27 +47,13 @@ public class DungeonManager : MonoBehaviour
             }
         }
 
-        // Auto-find EnemySpawner if missing
-        if (enemySpawner)
-        {
-            int baseCount = enemySpawner.totalEnemiestoSpawn;
-            enemySpawner.totalEnemiestoSpawn = Mathf.Max(5, baseCount + (currentLevel - 1) * enemyIncreasePerLevel);
-
-            enemySpawner.SpawnEnemiesInDungeon(currentDungeon, playerSpawn, player);
-
-            enemySpawner.totalEnemiestoSpawn = baseCount;
-
-            Debug.Log($"[DungeonManager] Spawned enemies, alive: {GetRemainingEnemies()}");
-        }
-
-
         if (!levelExitPrefab)
         {
             Debug.LogError("[DungeonManager] Level Exit Prefab not assigned (drag it from Project).");
             yield break;
         }
 
-        yield return null; // wait a frame so other Start() methods run
+        yield return null;
 
         Vector3 startPos = NextLevel();
         if (player) player.position = startPos;
@@ -109,17 +96,11 @@ public class DungeonManager : MonoBehaviour
             exitController.SetActive(false); // start locked
         }
 
-        // Spawn enemies
         if (enemySpawner)
         {
-            int baseCount = enemySpawner.totalEnemiestoSpawn;
-            enemySpawner.totalEnemiestoSpawn = Mathf.Max(5, baseCount + (currentLevel - 1) * enemyIncreasePerLevel);
-
-            // Pass player Transform here
-            enemySpawner.SpawnEnemiesInDungeon(currentDungeon, playerSpawn, player);
-
-            enemySpawner.totalEnemiestoSpawn = baseCount;
-            Debug.Log($"[DungeonManager] Spawned enemies, alive: {GetRemainingEnemies()}");
+            int enemyCount = baseEnemyCount + (currentLevel - 1) * enemyIncreasePerLevel;
+            enemySpawner.SpawnEnemiesInDungeon(currentDungeon, playerSpawn, player, enemyCount);
+            Debug.Log($"[DungeonManager] Spawned {enemyCount} enemies for level {currentLevel}. Alive: {GetRemainingEnemies()}");
         }
 
         // Events + watcher

@@ -1,7 +1,4 @@
 using System.Collections.Generic;
-using NUnit.Framework;
-using Unity.VisualScripting;
-using UnityEditor.PackageManager;
 
 public static class WallTypesHelper
 {
