@@ -962,6 +962,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   deathScreenCanvas: {fileID: 1870041817}
+  firstSelectedUI: {fileID: 0}
 --- !u!4 &831053984
 Transform:
   m_ObjectHideFlags: 0
@@ -14243,6 +14244,7 @@ MonoBehaviour:
   player: {fileID: 1244046777}
   enemySpawner: {fileID: 2119495277}
   spawnOffset: {x: 0.5, y: 0.5, z: 0}
+  baseEnemyCount: 5
   enemyIncreasePerLevel: 1
   currentLevel: 1
 --- !u!4 &1527813198
@@ -17813,8 +17815,16 @@ MonoBehaviour:
   healthText: {fileID: 0}
   playerController: {fileID: 1244046774}
   fullHealthColor: {r: 0.17221434, g: 0.8113208, b: 0.17221434, a: 1}
+  mediumHealthColor: {r: 1, g: 0.8, b: 0, a: 1}
   lowHealthColor: {r: 0.8207547, g: 0.23616053, b: 0.23616053, a: 1}
   lowHealthThreshold: 0.3
+  mediumHealthThreshold: 0.5
+  smoothSpeed: 5
+  pulseOnLowHealth: 1
+  pulseSpeed: 2
+  pulseIntensity: 0.3
+  backgroundImage: {fileID: 0}
+  backgroundColor: {r: 0.15, g: 0.15, b: 0.15, a: 0.8}
 --- !u!114 &1643289900
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -17844,7 +17854,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 0cd44c1031e13a943bb63640046fad76, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  m_UiScaleMode: 0
+  m_UiScaleMode: 1
   m_ReferencePixelsPerUnit: 100
   m_ScaleFactor: 1
   m_ReferenceResolution: {x: 800, y: 600}
@@ -18434,9 +18444,10 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   enemyPrefab: {fileID: 7183798004871989107, guid: 8ed6ec6eb6b905b4eb4571b6142f0d1e, type: 3}
-  totalEnemiestoSpawn: 1
-  minDistanceFromPlayer: 3
+  spawnOffset: 0.5
   minDistanceBetweenEnemies: 2
+  minDistanceFromPlayer: 3
+  spreadAcrossRooms: 1
 --- !u!4 &2119495278
 Transform:
   m_ObjectHideFlags: 0

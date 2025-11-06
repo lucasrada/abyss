@@ -1,7 +1,9 @@
-// EnemyController.cs (REPLACE existing file)
 using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 [RequireComponent(typeof(Rigidbody2D))]
 public class EnemyController : MonoBehaviour
@@ -70,6 +72,7 @@ public class EnemyController : MonoBehaviour
     void Start()
     {
         Initialize();
+        ValidateConfiguration();
         StartCoroutine(AIUpdateRoutine());
     }
 
@@ -97,6 +100,44 @@ public class EnemyController : MonoBehaviour
         enemyLayerMask = LayerMask.GetMask("Enemy");
 
         if (showDebug) Debug.Log($"{name}: Initialized. Player={player?.name}");
+    }
+
+    void ValidateConfiguration()
+    {
+        bool hasErrors = false;
+
+        if (player == null)
+        {
+            Debug.LogWarning($"[{name}] Player not found! Make sure Player has 'Player' tag assigned.");
+            hasErrors = true;
+        }
+
+        if (rb == null)
+        {
+            Debug.LogError($"[{name}] Rigidbody2D component is missing!");
+            hasErrors = true;
+        }
+
+        if (LayerMask.NameToLayer("Enemy") == -1)
+        {
+            Debug.LogWarning($"[{name}] 'Enemy' layer not found. Create it in Tags & Layers.");
+            hasErrors = true;
+        }
+
+        if (LayerMask.NameToLayer("Wall") == -1)
+        {
+            Debug.LogWarning($"[{name}] 'Wall' layer not found. Create it in Tags & Layers for better collision detection.");
+        }
+
+        if (dungeon == null && usePathfinding)
+        {
+            Debug.LogWarning($"[{name}] Dungeon reference not set. Pathfinding will fall back to direct steering. Call InitializeWithDungeon() from spawner.");
+        }
+
+        if (hasErrors)
+        {
+            Debug.LogError($"[{name}] Enemy has configuration errors. Check warnings above.");
+        }
     }
 
     void ClearPath()
@@ -555,4 +596,44 @@ public class EnemyController : MonoBehaviour
     // small public getters
     public bool IsDead => isDead;
     public Vector2 TargetPosition => isFollowingPath ? currentPathTarget : (player ? (Vector2)player.position : (Vector2)transform.position);
+
+    void OnDrawGizmos()
+    {
+        if (!showDebug) return;
+
+        if (isDead) return;
+
+        Gizmos.color = Color.yellow;
+        Gizmos.DrawWireSphere(transform.position, detectionRange);
+
+        Gizmos.color = Color.red;
+        Gizmos.DrawWireSphere(transform.position, attackRange);
+
+        if (player != null)
+        {
+            bool canSee = CanSeePlayer();
+            Gizmos.color = canSee ? Color.green : Color.gray;
+            Gizmos.DrawLine(transform.position, player.position);
+        }
+
+        if (isFollowingPath && pathQueue.Count > 0)
+        {
+            Gizmos.color = Color.cyan;
+            Vector3 prev = transform.position;
+            Gizmos.DrawSphere(currentPathTarget, 0.2f);
+            Gizmos.DrawLine(prev, currentPathTarget);
+            prev = currentPathTarget;
+
+            foreach (Vector2 waypoint in pathQueue)
+            {
+                Gizmos.DrawSphere(waypoint, 0.15f);
+                Gizmos.DrawLine(prev, waypoint);
+                prev = waypoint;
+            }
+        }
+
+#if UNITY_EDITOR
+        Handles.Label(transform.position + Vector3.up * 1.5f, $"State: {currentState}\nHP: {currentHealth}/{maxHealth}");
+#endif
+    }
 }
