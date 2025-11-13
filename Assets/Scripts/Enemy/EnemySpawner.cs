@@ -14,7 +14,19 @@ public class EnemySpawner : MonoBehaviour
 
     private List<GameObject> aliveEnemies = new List<GameObject>();
 
-    public void SpawnEnemiesInDungeon(Dungeon dungeon, Vector3 spawnPos, Transform playerT, int enemyCount)
+    [Header("Difficulty Scaling")]
+    [Tooltip("Salud relativa de los enemigos en el nivel 1.")]
+    public float baseHealthMultiplier = 0.6f;
+    [Tooltip("Incremento lineal de salud por nivel.")]
+    public float healthPerLevel = 0.12f;
+    [Tooltip("Variación aleatoria de la salud (+/-).")]
+    public float healthRandomVariance = 0.15f;
+    [Tooltip("Daño relativo de los enemigos en el nivel 1.")]
+    public float baseDamageMultiplier = 0.9f;
+    [Tooltip("Incremento lineal del daño por nivel.")]
+    public float damagePerLevel = 0.08f;
+
+    public void SpawnEnemiesInDungeon(Dungeon dungeon, Vector3 spawnPos, Transform playerT, int enemyCount, int level = 1)
     {
         if (enemyPrefab == null || dungeon == null)
         {
@@ -24,9 +36,11 @@ public class EnemySpawner : MonoBehaviour
 
         aliveEnemies.Clear();
 
+        Vector2 spawnCenterOffset = (Vector2)(spawnPos - (Vector3)dungeon.GetStartLocation());
+
         List<Vector2> spawnPositions = spreadAcrossRooms
-            ? GetDistributedSpawnPositions(dungeon, spawnPos, playerT, enemyCount)
-            : GetNearbySpawnPositions(dungeon, spawnPos, playerT, enemyCount);
+            ? GetDistributedSpawnPositions(dungeon, playerT, enemyCount, spawnCenterOffset)
+            : GetNearbySpawnPositions(dungeon, playerT, enemyCount, spawnCenterOffset);
 
         int spawned = 0;
         foreach (Vector2 pos in spawnPositions)
@@ -38,6 +52,7 @@ public class EnemySpawner : MonoBehaviour
             if (ec != null)
             {
                 ec.InitializeWithDungeon(dungeon, playerT);
+                ApplyDifficulty(ec, level);
             }
 
             aliveEnemies.Add(enemyGO);
@@ -50,16 +65,17 @@ public class EnemySpawner : MonoBehaviour
         }
     }
 
-    private List<Vector2> GetDistributedSpawnPositions(Dungeon dungeon, Vector3 spawnPos, Transform playerT, int enemyCount)
+    private List<Vector2> GetDistributedSpawnPositions(Dungeon dungeon, Transform playerT, int enemyCount, Vector2 gridToWorldOffset)
     {
         List<Vector2> positions = new List<Vector2>();
         List<Room> rooms = dungeon.GetRooms();
         List<Vector2> candidatePositions = new List<Vector2>();
+        Vector2 playerPos = playerT ? (Vector2)playerT.position : Vector2.zero;
 
         if (rooms == null || rooms.Count == 0)
         {
             Debug.LogWarning("[EnemySpawner] No rooms found in dungeon. Falling back to nearby spawning.");
-            return GetNearbySpawnPositions(dungeon, spawnPos, playerT, enemyCount);
+            return GetNearbySpawnPositions(dungeon, playerT, enemyCount, gridToWorldOffset);
         }
 
         foreach (Room room in rooms)
@@ -67,10 +83,11 @@ public class EnemySpawner : MonoBehaviour
             List<Vector2> roomFloors = room.GetAllFloorPositions();
             foreach (Vector2 pos in roomFloors)
             {
-                if (playerT != null && Vector2.Distance(pos, playerT.position) < minDistanceFromPlayer)
+                Vector2 worldPos = GridToWorld(pos, gridToWorldOffset);
+                if (playerT != null && Vector2.Distance(worldPos, playerPos) < minDistanceFromPlayer)
                     continue;
 
-                candidatePositions.Add(pos);
+                candidatePositions.Add(worldPos);
             }
         }
 
@@ -95,7 +112,8 @@ public class EnemySpawner : MonoBehaviour
 
             if (!tooClose)
             {
-                positions.Add(candidate + new Vector2(Random.Range(-spawnOffset, spawnOffset), Random.Range(-spawnOffset, spawnOffset)));
+                Vector2 jitter = new Vector2(Random.Range(-spawnOffset, spawnOffset), Random.Range(-spawnOffset, spawnOffset));
+                positions.Add(candidate + jitter);
             }
 
             candidatePositions.RemoveAt(randomIndex);
@@ -104,33 +122,53 @@ public class EnemySpawner : MonoBehaviour
         return positions;
     }
 
-    private List<Vector2> GetNearbySpawnPositions(Dungeon dungeon, Vector3 spawnPos, Transform playerT, int enemyCount)
+    private void ApplyDifficulty(EnemyController enemy, int level)
+    {
+        if (enemy == null) return;
+        level = Mathf.Max(1, level);
+
+        float baseHealth = baseHealthMultiplier + (level - 1) * healthPerLevel;
+        baseHealth = Mathf.Max(0.1f, baseHealth);
+        float variance = 1f;
+        if (healthRandomVariance > 0f)
+        {
+            variance = Random.Range(1f - healthRandomVariance, 1f + healthRandomVariance);
+        }
+        float healthMultiplier = Mathf.Max(0.1f, baseHealth * variance);
+        float damageMultiplier = Mathf.Max(0.1f, baseDamageMultiplier + (level - 1) * damagePerLevel);
+
+        enemy.ApplyDifficultyScaling(healthMultiplier, damageMultiplier);
+    }
+
+    private List<Vector2> GetNearbySpawnPositions(Dungeon dungeon, Transform playerT, int enemyCount, Vector2 gridToWorldOffset)
     {
         List<Vector2> positions = new List<Vector2>();
         int attempts = 0;
         int maxAttempts = enemyCount * 10;
+        Vector2 playerPosWorld = playerT ? (Vector2)playerT.position : Vector2.zero;
+        Vector2Int playerGrid = playerT
+            ? Vector2Int.RoundToInt((Vector2)playerT.position - gridToWorldOffset)
+            : Vector2Int.zero;
 
         while (positions.Count < enemyCount && attempts < maxAttempts)
         {
             attempts++;
 
-            Vector2 randomPos = new Vector2(
-                spawnPos.x + Random.Range(-5f, 5f),
-                spawnPos.y + Random.Range(-5f, 5f)
-            );
-
-            if (playerT != null && Vector2.Distance(randomPos, playerT.position) < minDistanceFromPlayer)
-                continue;
-
-            Vector2Int gridPos = new Vector2Int(Mathf.RoundToInt(randomPos.x), Mathf.RoundToInt(randomPos.y));
+            Vector2 randomOffset = new Vector2(Random.Range(-5f, 5f), Random.Range(-5f, 5f));
+            Vector2Int gridPos = playerGrid + Vector2Int.RoundToInt(randomOffset);
 
             if (!dungeon.IsInBounds(gridPos.x, gridPos.y) || !dungeon.IsFloor(gridPos.x, gridPos.y))
+                continue;
+
+            Vector2 worldPos = GridToWorld(gridPos, gridToWorldOffset);
+
+            if (playerT != null && Vector2.Distance(worldPos, playerPosWorld) < minDistanceFromPlayer)
                 continue;
 
             bool tooClose = false;
             foreach (Vector2 existing in positions)
             {
-                if (Vector2.Distance(randomPos, existing) < minDistanceBetweenEnemies)
+                if (Vector2.Distance(worldPos, existing) < minDistanceBetweenEnemies)
                 {
                     tooClose = true;
                     break;
@@ -139,7 +177,8 @@ public class EnemySpawner : MonoBehaviour
 
             if (!tooClose)
             {
-                positions.Add(randomPos);
+                Vector2 jitter = new Vector2(Random.Range(-spawnOffset, spawnOffset), Random.Range(-spawnOffset, spawnOffset));
+                positions.Add(worldPos + jitter);
             }
         }
 
@@ -159,5 +198,10 @@ public class EnemySpawner : MonoBehaviour
         // clean nulls
         aliveEnemies.RemoveAll(e => e == null);
         return aliveEnemies.Count;
+    }
+
+    private static Vector2 GridToWorld(Vector2 gridPosition, Vector2 offset)
+    {
+        return gridPosition + offset;
     }
 }
