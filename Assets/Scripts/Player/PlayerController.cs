@@ -1,5 +1,6 @@
-using UnityEngine;
 using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
 
 [RequireComponent(typeof(Rigidbody2D), typeof(Animator), typeof(Collider2D))]
 public class PlayerController : MonoBehaviour
@@ -12,13 +13,30 @@ public class PlayerController : MonoBehaviour
     [Tooltip("Damage dealt to enemies")]
     public int attackDamage = 25;
     [Tooltip("Attack range")]
-    public float attackRange = 1.5f;
+    public float attackRange = 1.7f;
+    [Tooltip("Forward offset for the melee hitbox")]
+    public float attackForwardOffset = 0.45f;
+    [Tooltip("Hitbox interior para enemigos pegados al jugador")]
+    public float attackInnerRadius = 0.9f;
+    [Tooltip("How wide the attack cone is (-1 = 360°, 1 = solo frente)")]
+    [Range(-1f, 1f)] public float attackDirectionThreshold = -0.1f;
+    [Tooltip("Knockback aplicado a los enemigos")]
+    public float attackKnockbackForce = 5f;
+    [Header("Attack Feedback")]
+    [Tooltip("Duración del hitstop cuando conectás un golpe")]
+    public float attackHitstopDuration = 0.05f;
+    [Tooltip("Escala de tiempo durante el hitstop")]
+    [Range(0.01f, 1f)] public float attackHitstopTimeScale = 0.2f;
+    [Tooltip("Multiplicador de daño para el ataque ligero (J)")]
+    public float lightAttackDamageMultiplier = 1f;
+    [Tooltip("Multiplicador de daño para el ataque pesado (K)")]
+    public float heavyAttackDamageMultiplier = 2.3f;
     [Tooltip("Player's maximum health")]
     public int maxHealth = 100;
     
     [Header("Dash Settings")]
     [Tooltip("Tecla para dachear")]
-    public KeyCode dashKey = KeyCode.L;
+    public KeyCode dashKey = KeyCode.LeftShift;
     [Tooltip("Velocidad del dash")]
     public float dashSpeed = 16f;
     [Tooltip("Duración del dash (segundos)")]
@@ -49,6 +67,8 @@ public class PlayerController : MonoBehaviour
     private int currentHealth;
     private bool isInvulnerable = false;
     private bool isDead = false;
+    private Coroutine hitStopRoutine;
+    private readonly HashSet<EnemyController> attackTargets = new HashSet<EnemyController>();
 
     // --- Events ---
     public System.Action<int> OnHealthChanged;
@@ -82,7 +102,7 @@ public class PlayerController : MonoBehaviour
 
         bool isAttacking = animator.GetBool("IsAttacking");
 
-        if (!isAttacking && !isDashing)
+        if (!isDashing)
         {
             float horizontal = Input.GetAxisRaw("Horizontal");
             float vertical = Input.GetAxisRaw("Vertical");
@@ -116,13 +136,13 @@ public class PlayerController : MonoBehaviour
         {
             animator.ResetTrigger("Attack1");
             animator.SetTrigger("Attack1");
-            PerformAttack();
+            PerformAttack(false);
         }
         if (Input.GetKeyDown(KeyCode.K) && CanFireAttack())
         {
             animator.ResetTrigger("Attack2");
             animator.SetTrigger("Attack2");
-            PerformAttack();
+            PerformAttack(true);
         }
 
         if (!isAttacking && Input.GetKeyDown(KeyCode.H))
@@ -168,25 +188,47 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-    void PerformAttack()
+    void PerformAttack(bool isHeavyAttack)
     {
-        Collider2D[] hitEnemies = Physics2D.OverlapCircleAll(transform.position, attackRange, 1 << enemyLayer);
-        
-        Vector2 attackDirection = lastDirection;
-        
-        foreach (Collider2D enemy in hitEnemies)
+        Vector2 attackDir = lastDirection.sqrMagnitude > 0.01f ? lastDirection.normalized : Vector2.down;
+        Vector2 origin = rb ? rb.position : (Vector2)transform.position;
+        Vector2 forwardOrigin = origin + attackDir * Mathf.Max(0f, attackForwardOffset);
+
+        attackTargets.Clear();
+        int mask = 1 << enemyLayer;
+
+        AddTargets(Physics2D.OverlapCircleAll(origin, Mathf.Max(0.1f, attackInnerRadius), mask), attackDir, origin, false);
+        AddTargets(Physics2D.OverlapCircleAll(forwardOrigin, Mathf.Max(attackInnerRadius, attackRange), mask), attackDir, forwardOrigin, true);
+
+        if (attackTargets.Count == 0) return;
+
+        int damage = Mathf.Max(1, Mathf.RoundToInt(attackDamage * (isHeavyAttack ? heavyAttackDamageMultiplier : lightAttackDamageMultiplier)));
+
+        foreach (var enemy in attackTargets)
         {
-            Vector2 dirToEnemy = (enemy.transform.position - transform.position).normalized;
-            float dot = Vector2.Dot(attackDirection, dirToEnemy);
-            
-            if (dot > 0.5f)
+            if (!enemy) continue;
+            enemy.TakeDamage(damage);
+            Vector2 dirToEnemy = ((Vector2)enemy.transform.position - origin).normalized;
+            enemy.ApplyHitFeedback(dirToEnemy, attackKnockbackForce);
+        }
+
+        TriggerHitStop(isHeavyAttack ? 1.4f : 1f);
+    }
+
+    void AddTargets(Collider2D[] hits, Vector2 attackDir, Vector2 origin, bool directionalCheck)
+    {
+        if (hits == null) return;
+        foreach (var hit in hits)
+        {
+            if (!hit) continue;
+            EnemyController enemy = hit.GetComponent<EnemyController>();
+            if (!enemy) continue;
+            if (directionalCheck)
             {
-                EnemyController enemyController = enemy.GetComponent<EnemyController>();
-                if (enemyController != null)
-                {
-                    enemyController.TakeDamage(attackDamage);
-                }
+                Vector2 dirToEnemy = ((Vector2)enemy.transform.position - origin).normalized;
+                if (Vector2.Dot(attackDir, dirToEnemy) < attackDirectionThreshold) continue;
             }
+            attackTargets.Add(enemy);
         }
     }
 
@@ -303,13 +345,52 @@ public class PlayerController : MonoBehaviour
         return false;
     }
 
+    void TriggerHitStop(float intensityMultiplier = 1f)
+    {
+        if (attackHitstopDuration <= 0f || Time.timeScale <= 0f) return;
+        if (hitStopRoutine != null) StopCoroutine(hitStopRoutine);
+        hitStopRoutine = StartCoroutine(HitStopRoutine(intensityMultiplier));
+    }
+
+    IEnumerator HitStopRoutine(float intensityMultiplier)
+    {
+        float previousScale = Time.timeScale;
+        float targetScale = Mathf.Clamp(attackHitstopTimeScale, 0.01f, previousScale);
+        Time.timeScale = targetScale;
+        float duration = attackHitstopDuration * Mathf.Max(0.1f, intensityMultiplier);
+        yield return new WaitForSecondsRealtime(duration);
+        if (Mathf.Approximately(Time.timeScale, targetScale))
+        {
+            Time.timeScale = previousScale;
+        }
+        hitStopRoutine = null;
+    }
+
     void OnDrawGizmosSelected()
     {
+        Vector2 attackDir = lastDirection.sqrMagnitude > 0.01f ? lastDirection.normalized : Vector2.down;
+        Vector3 origin = Application.isPlaying && rb ? (Vector3)rb.position : transform.position;
+        Vector3 forwardOrigin = origin + (Vector3)(attackDir * attackForwardOffset);
+
         Gizmos.color = Color.red;
-        Gizmos.DrawWireSphere(transform.position, attackRange);
+        Gizmos.DrawWireSphere(forwardOrigin, attackRange);
+        Gizmos.color = Color.yellow;
+        Gizmos.DrawWireSphere(origin, attackInnerRadius);
+        Gizmos.DrawLine(origin, forwardOrigin);
     }
 
     public bool IsDead => isDead;
     public int CurrentHealth => currentHealth;
     public int MaxHealth => maxHealth;
+    public float DashCooldownRemaining => Mathf.Max(0f, nextDashTime - Time.time);
+    public float DashCooldownNormalized
+    {
+        get
+        {
+            if (dashCooldown <= 0f) return 1f;
+            float remaining = Mathf.Max(0f, nextDashTime - Time.time);
+            return 1f - Mathf.Clamp01(remaining / dashCooldown);
+        }
+    }
+    public bool IsDashReady => Time.time >= nextDashTime;
 }

@@ -1,6 +1,5 @@
 using UnityEngine;
 using UnityEngine.UI;
-using System.Collections;
 
 public class HealthUI : MonoBehaviour
 {
@@ -36,22 +35,16 @@ public class HealthUI : MonoBehaviour
     [Tooltip("Pulse intensity (0-1)")]
     [Range(0f, 1f)]
     public float pulseIntensity = 0.3f;
-
-    [Header("Background Settings")]
-    [Tooltip("Background image for health bar")]
-    public Image backgroundImage;
-    [Tooltip("Background color")]
-    public Color backgroundColor = new Color(0.15f, 0.15f, 0.15f, 0.8f);
+    [Tooltip("Normalized difference before snapping to the exact value to avoid stray ticks")]
+    [Range(0f, 0.1f)]
+    public float snapThreshold = 0.002f;
 
     private Image healthBarFill;
     private float targetHealthValue;
     private float displayHealthValue;
-    private RectTransform rectTransform;
 
     void Start()
     {
-        rectTransform = GetComponent<RectTransform>();
-
         if (playerController == null)
         {
             GameObject player = GameObject.FindGameObjectWithTag("Player");
@@ -68,11 +61,6 @@ public class HealthUI : MonoBehaviour
             healthBarSlider.minValue = 0;
             healthBarSlider.maxValue = 100;
             healthBarSlider.interactable = false;
-        }
-
-        if (backgroundImage != null)
-        {
-            backgroundImage.color = backgroundColor;
         }
 
         if (playerController != null)
@@ -95,9 +83,15 @@ public class HealthUI : MonoBehaviour
         if (healthBarSlider != null && playerController != null)
         {
             displayHealthValue = Mathf.Lerp(displayHealthValue, targetHealthValue, Time.deltaTime * smoothSpeed);
+            float maxHealth = Mathf.Max(1f, playerController.MaxHealth);
+            float normalizedDiff = Mathf.Abs(displayHealthValue - targetHealthValue) / maxHealth;
+            if (normalizedDiff <= Mathf.Max(0.0001f, snapThreshold))
+            {
+                displayHealthValue = targetHealthValue;
+            }
             healthBarSlider.value = displayHealthValue;
 
-            float healthPercentage = displayHealthValue / playerController.MaxHealth;
+            float healthPercentage = displayHealthValue / maxHealth;
 
             if (healthBarFill != null)
             {
@@ -165,4 +159,5 @@ public class HealthUI : MonoBehaviour
             playerController.OnPlayerDeath -= OnPlayerDeath;
         }
     }
+
 }
